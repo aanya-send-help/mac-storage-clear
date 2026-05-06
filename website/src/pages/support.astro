@@ -42,14 +42,53 @@ import Base from "../layouts/Base.astro";
         </div>
 
         <div>
-          <h3 class="font-medium">Why does the App Store version not scan other users' files?</h3>
+          <h3 class="font-medium">Can the App Store version scan other users' files?</h3>
           <p class="mt-1 text-sm text-ink/70 leading-relaxed">
-            The Mac App Store sandbox prohibits cross-user filesystem access. If you need to clean
-            up files left behind by deleted user accounts, build the open-source version from <a
+            With Full Disk Access granted and a user-selected folder added (via the in-app "Add
+            folder to scan" button), the App Store version can reach <em>everything readable by
+            your user account</em>. That includes orphaned home directories from deleted user
+            accounts, as long as their files' Unix permissions allow your account to read them.
+          </p>
+          <p class="mt-2 text-sm text-ink/70 leading-relaxed">
+            If the deleted account's files are still owned by the old UID with restrictive perms
+            (mode 0700), you'll need to take ownership first — see "Claiming files from a deleted
+            user" below. Alternatively, the open-source <a
               href="https://github.com/aanya-send-help/mac-storage-clear"
               class="underline"
-              rel="noopener">our GitHub repo</a
-            > — that build includes a privileged helper for multi-user scans.
+              rel="noopener">direct-download build</a
+            > ships a privileged helper that bypasses Unix perms via Authorization Services.
+          </p>
+        </div>
+
+        <div>
+          <h3 class="font-medium">Claiming files from a deleted user</h3>
+          <p class="mt-1 text-sm text-ink/70 leading-relaxed">
+            macOS lets you delete a user account but keep their home folder. The kept folder
+            stays owned by the deleted account's UID, so your account can't read those files
+            even with Full Disk Access. To transfer ownership in one step, run our helper
+            script:
+          </p>
+          <pre
+            class="mt-3 bg-black/5 rounded p-3 text-xs overflow-x-auto"><code>curl -fsSL https://mac-storage-clear.flek.ai/scripts/claim-orphaned-home.sh -o /tmp/claim-orphaned-home.sh
+chmod +x /tmp/claim-orphaned-home.sh
+sudo /tmp/claim-orphaned-home.sh &lt;deleted-username&gt;
+# e.g. sudo /tmp/claim-orphaned-home.sh flek</code></pre>
+          <p class="mt-2 text-sm text-ink/70 leading-relaxed">
+            The script transfers ownership of <code class="text-xs bg-black/5 px-1 rounded"
+              >/Users/&lt;name&gt;</code
+            > to the user who invoked sudo. It refuses to act outside <code
+              class="text-xs bg-black/5 px-1 rounded">/Users</code
+            >, refuses if a user with that name still exists, and prompts before touching
+            anything. It's a small, auditable shell script — read it on <a
+              href="https://github.com/aanya-send-help/mac-storage-clear/blob/main/scripts/claim-orphaned-home.sh"
+              class="underline"
+              rel="noopener">GitHub</a
+            > before running it.
+          </p>
+          <p class="mt-2 text-sm text-ink/70 leading-relaxed">
+            We deliberately ship this as a separate script rather than building it into the app —
+            ownership transfer is a one-shot operation that shouldn't live behind a permission
+            prompt every time you launch the app.
           </p>
         </div>
 

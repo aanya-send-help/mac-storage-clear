@@ -61,9 +61,25 @@ mac-storage-clear/
 ├── src-tauri/              Rust backend (scanner, helper, IPC)
 ├── src/                    React frontend
 ├── website/                Astro static site → mac-storage-clear.flek.ai
+├── scripts/                Standalone utility scripts (run from terminal)
 ├── docs/                   Architecture, distribution, App Review notes
 └── .github/workflows/      CI + release pipelines
 ```
+
+## Cleaning up after deleted user accounts
+
+If you deleted a macOS user account but their home folder still exists in `/Users/`, those files are still owned by the deleted user's UID and unreadable by your account. Even with Full Disk Access, the App Store build of Mac Storage Clear can't touch them — Unix permissions block reads of files you don't own.
+
+Use the `claim-orphaned-home.sh` script to transfer ownership of those files to your account once. After that the App Store build (with FDA + a user-granted folder for `/Users`) can scan and delete them normally:
+
+```sh
+sudo ./scripts/claim-orphaned-home.sh <deleted-username>
+# e.g. sudo ./scripts/claim-orphaned-home.sh flek
+```
+
+The script refuses to operate outside `/Users`, refuses if a user account with that name still exists, and prompts before changing anything. It's intentionally a separate script — not bundled inside the app — because escalation of privilege is a one-shot operation that doesn't belong in a sandboxed UI.
+
+You don't need to clone the repo to run it; it's also linked from [mac-storage-clear.flek.ai/support](https://mac-storage-clear.flek.ai/support).
 
 ## Contributing
 

@@ -2,6 +2,23 @@ import { create } from "zustand";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { invoke } from "./tauri";
 
+/** Deepest path that is a prefix of every input. Returns "/" if nothing in common. */
+function commonAncestor(paths: string[]): string {
+  if (paths.length === 0) return "/";
+  const splits = paths.map((p) => p.split("/").filter(Boolean));
+  const out: string[] = [];
+  const first = splits[0]!;
+  for (let i = 0; i < first.length; i++) {
+    const seg = first[i];
+    if (splits.every((s) => s[i] === seg)) {
+      out.push(seg!);
+    } else {
+      break;
+    }
+  }
+  return out.length === 0 ? "/" : "/" + out.join("/");
+}
+
 export interface ScanStatus {
   scan_id: number;
   status: "running" | "done" | "cancelled" | "failed";
@@ -62,11 +79,11 @@ export const useScanStore = create<ScanState>((set, get) => ({
     try {
       const roots = await invoke<string[]>("default_scan_roots");
       set({ defaultRoots: roots });
-      // Kick off treemap load for the default root once we know it. The
-      // treemap component's useEffect runs on mount (before defaultRoots
-      // arrived), so without this the treemap stays empty after a fresh
-      // app launch even when scan data is already in the DB.
-      const target = roots[0];
+      // Treemap initial view: if we have multiple scan roots (HOME + claimed
+      // orphan homes), default to their common ancestor so they appear as
+      // siblings. Otherwise just use the single root.
+      const target =
+        roots.length > 1 ? commonAncestor(roots) : roots[0] ?? null;
       if (target && get().treemap.length === 0) {
         set({ treemapRoot: target });
         get().loadTreemap(target);

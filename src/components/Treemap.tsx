@@ -50,7 +50,15 @@ export function Treemap({ width = 1000, height = 520 }: Props) {
   }, []);
 
   const totalSize = treemapData.reduce((acc, n) => acc + n.size, 0);
-  const rootForCrumbs = defaultRoots[0] ?? treemapRoot ?? "/";
+  // The breadcrumb root is the deepest path that's a prefix of every scan
+  // target. With one root this equals the root; with multiple it's their
+  // common ancestor (typically "/Users").
+  const rootForCrumbs =
+    defaultRoots.length === 0
+      ? treemapRoot ?? "/"
+      : defaultRoots.length === 1
+        ? defaultRoots[0]!
+        : commonAncestorOf(defaultRoots);
 
   // While a scan is running we don't aggregate, so the treemap is empty by
   // design until completion.
@@ -214,4 +222,20 @@ function truncate(s: string, maxChars: number): string {
   if (s.length <= maxChars) return s;
   if (maxChars <= 1) return "…";
   return s.slice(0, maxChars - 1) + "…";
+}
+
+function commonAncestorOf(paths: string[]): string {
+  if (paths.length === 0) return "/";
+  const splits = paths.map((p) => p.split("/").filter(Boolean));
+  const out: string[] = [];
+  const first = splits[0]!;
+  for (let i = 0; i < first.length; i++) {
+    const seg = first[i];
+    if (splits.every((s) => s[i] === seg)) {
+      out.push(seg!);
+    } else {
+      break;
+    }
+  }
+  return out.length === 0 ? "/" : "/" + out.join("/");
 }

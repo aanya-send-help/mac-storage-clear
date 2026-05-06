@@ -13,15 +13,29 @@ export function ScanProgress() {
         <div className="text-sm text-muted">
           {defaultRoots.length === 0
             ? "Detecting scan root…"
-            : `Ready to scan ${defaultRoots[0]}`}
+            : defaultRoots.length === 1
+              ? `Ready to scan ${defaultRoots[0]}`
+              : `Ready to scan ${defaultRoots.length} folders`}
         </div>
-        <button
-          onClick={() => startScan()}
-          disabled={defaultRoots.length === 0}
-          className="px-4 py-2 text-sm font-medium bg-accent text-white rounded-md hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed"
-        >
-          Start scan
-        </button>
+        <div className="flex items-center gap-2">
+          {defaultRoots.length > 1 && (
+            <details className="text-xs text-muted">
+              <summary className="cursor-pointer hover:text-fg">show paths</summary>
+              <ul className="mt-1 font-mono text-[11px]">
+                {defaultRoots.map((r) => (
+                  <li key={r}>{r}</li>
+                ))}
+              </ul>
+            </details>
+          )}
+          <button
+            onClick={() => startScan()}
+            disabled={defaultRoots.length === 0}
+            className="px-4 py-2 text-sm font-medium bg-accent text-white rounded-md hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            Start scan
+          </button>
+        </div>
       </div>
     );
   }

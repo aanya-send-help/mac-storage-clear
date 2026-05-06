@@ -32,17 +32,54 @@ pub fn get_build_info() -> BuildInfo {
 
 // ── default scan roots ─────────────────────────────────────────────────────
 
+/// Top-level discovery of folders to scan. Returns the user's HOME plus every
+/// /Users/<name> directory owned by the current uid — covering orphaned home
+/// folders that were claimed via the `claim-orphaned-home.sh` script. Other
+/// users' homes (still owned by their uid) are deliberately excluded; we
+/// can't read them anyway.
 #[tauri::command]
 pub fn default_scan_roots() -> Vec<String> {
-    // Phase 1: scan the user's home only.
-    let home = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_default();
-    if home.as_os_str().is_empty() {
-        Vec::new()
-    } else {
-        vec![home.display().to_string()]
+    use std::os::unix::fs::MetadataExt;
+
+    let mut roots: Vec<PathBuf> = Vec::new();
+    // SAFETY: getuid is always safe to call.
+    let my_uid = unsafe { libc::getuid() };
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+
+    // 1. HOME first (always our primary target).
+    if let Some(h) = home.clone() {
+        if !h.as_os_str().is_empty() {
+            roots.push(h);
+        }
     }
+
+    // 2. Walk top-level /Users entries, include any directory owned by the
+    //    current user that isn't already HOME or a system entry.
+    if let Ok(entries) = std::fs::read_dir("/Users") {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let name = match path.file_name().and_then(|n| n.to_str()) {
+                Some(n) => n,
+                None => continue,
+            };
+            if matches!(name, "Shared" | "Guest" | ".localized") || name.starts_with('.') {
+                continue;
+            }
+            if home.as_ref().is_some_and(|h| &path == h) {
+                continue;
+            }
+            let meta = match std::fs::symlink_metadata(&path) {
+                Ok(m) => m,
+                Err(_) => continue,
+            };
+            if !meta.is_dir() || meta.uid() != my_uid {
+                continue;
+            }
+            roots.push(path);
+        }
+    }
+
+    roots.into_iter().map(|p| p.display().to_string()).collect()
 }
 
 // ── scan lifecycle ─────────────────────────────────────────────────────────
@@ -106,13 +143,25 @@ pub fn get_treemap(
     limit: Option<usize>,
     state: State<'_, AppState>,
 ) -> Result<Vec<TreemapNode>, AppError> {
+    let start = std::time::Instant::now();
     let conn = state.index.conn();
     let conn = conn.lock();
+    let lock_acquired = start.elapsed();
     let scan_id = match crate::scanner::queries_latest_scan(&conn)? {
         Some(id) => id,
         None => return Ok(Vec::new()),
     };
-    crate::scanner::queries_treemap_children(&conn, scan_id, &parent, limit.unwrap_or(100))
+    let result =
+        crate::scanner::queries_treemap_children(&conn, scan_id, &parent, limit.unwrap_or(100))?;
+    let total = start.elapsed();
+    tracing::info!(
+        parent = %parent,
+        rows = result.len(),
+        lock_ms = lock_acquired.as_millis() as u64,
+        total_ms = total.as_millis() as u64,
+        "get_treemap"
+    );
+    Ok(result)
 }
 
 #[tauri::command]
@@ -120,11 +169,21 @@ pub fn list_largest(
     limit: Option<usize>,
     state: State<'_, AppState>,
 ) -> Result<Vec<LargestFile>, AppError> {
+    let start = std::time::Instant::now();
     let conn = state.index.conn();
     let conn = conn.lock();
+    let lock_acquired = start.elapsed();
     let scan_id = match crate::scanner::queries_latest_scan(&conn)? {
         Some(id) => id,
         None => return Ok(Vec::new()),
     };
-    crate::scanner::queries_largest(&conn, scan_id, limit.unwrap_or(100))
+    let result = crate::scanner::queries_largest(&conn, scan_id, limit.unwrap_or(100))?;
+    let total = start.elapsed();
+    tracing::info!(
+        rows = result.len(),
+        lock_ms = lock_acquired.as_millis() as u64,
+        total_ms = total.as_millis() as u64,
+        "list_largest"
+    );
+    Ok(result)
 }

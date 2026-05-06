@@ -98,7 +98,24 @@ pub fn run(
     files_seen.store(total_files, Ordering::Release);
     bytes_seen.store(total_bytes, Ordering::Release);
 
-    // Finalize scan_runs row regardless of outcome.
+    // Compute recursive sizes for treemap rendering. Skip if cancelled — the
+    // index is incomplete and aggregation would be misleading.
+    if !cancelled {
+        // Tell the UI we're now in an aggregation phase. The walker and
+        // writer have done their work; the user should not interpret this
+        // as "frozen". current_path is repurposed to communicate phase.
+        *current_path.lock() = Some("aggregating recursive sizes…".to_string());
+        if let Some(cb) = progress_cb.as_ref() {
+            cb(scan_handle.status());
+        }
+
+        let conn_guard = conn.lock();
+        aggregate_recursive_sizes(&conn_guard, scan_id)?;
+        drop(conn_guard);
+    }
+
+    // Finalize scan_runs row only after aggregation succeeds — so a row with
+    // status='done' is a real promise that recursive_size is accurate.
     {
         let conn = conn.lock();
         let now = now_unix() as i64;
@@ -115,13 +132,6 @@ pub fn run(
             ],
         )
         .map_err(|e| AppError::Sqlite(e.to_string()))?;
-    }
-
-    // Compute recursive sizes for treemap rendering. Skip if cancelled — the
-    // index is incomplete and aggregation would be misleading.
-    if !cancelled {
-        let conn = conn.lock();
-        aggregate_recursive_sizes(&conn, scan_id)?;
     }
 
     // Final emit happens in the parent thread after it sets finished_at and
@@ -154,7 +164,7 @@ fn flush_batch(
                     (scan_id, parent_path, name, full_path, depth, is_dir, is_symlink,
                      is_clone, size, recursive_size, logical_size, inode, dev,
                      mtime, ctime, btime)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 0, ?10, ?11, ?12, ?13, ?14, ?15)",
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
             )
             .map_err(|e| AppError::Sqlite(e.to_string()))?;
 
@@ -165,6 +175,12 @@ fn flush_batch(
             // CoW-cloned in a meaningful way).
             let is_clone = !entry.is_dir && !seen_inodes.insert(key);
             let size_to_store = if is_clone { 0 } else { entry.size };
+            // Initialize recursive_size at insert time. For files this is the
+            // own size; for directories it's 0 and the post-scan aggregation
+            // will replace it with the sum of descendants. Pre-initializing
+            // here saves a 30-60s full-table UPDATE at the start of
+            // aggregation on large scans.
+            let initial_recursive_size = if entry.is_dir { 0 } else { size_to_store };
 
             stmt.execute(params![
                 scan_id,
@@ -176,6 +192,7 @@ fn flush_batch(
                 entry.is_symlink as i64,
                 is_clone as i64,
                 size_to_store,
+                initial_recursive_size,
                 entry.logical_size,
                 entry.inode,
                 entry.dev,

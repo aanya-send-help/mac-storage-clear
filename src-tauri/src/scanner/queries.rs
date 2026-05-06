@@ -24,21 +24,14 @@ pub struct LargestFile {
     pub mtime: Option<i64>,
 }
 
-/// Compute `recursive_size` per row.
+/// Compute `recursive_size` for every directory in the scan.
 ///
-/// Strategy: for each non-clone leaf, recursive_size = size. Then for each
-/// depth from `max(depth)-1` down to 0, set recursive_size = own size + sum
-/// of children's recursive_size. One UPDATE per depth level; SQLite's planner
-/// hits the (scan_id, parent_path) index for the correlated SUM.
+/// `recursive_size` is pre-initialized at insert time (own size for files,
+/// 0 for dirs). Here we walk depths from deepest to shallowest, setting each
+/// dir's recursive_size to the sum of its children's recursive_size. One
+/// UPDATE per depth; SQLite's planner uses the (scan_id, parent_path) index
+/// for the correlated SUM.
 pub fn aggregate_recursive_sizes(conn: &Connection, scan_id: i64) -> AppResult<()> {
-    // Initialize: own size for non-clones, 0 for clones.
-    conn.execute(
-        "UPDATE files SET recursive_size = CASE WHEN is_clone = 0 THEN size ELSE 0 END
-         WHERE scan_id = ?1",
-        params![scan_id],
-    )
-    .map_err(map_sqlite)?;
-
     let max_depth: i64 = conn
         .query_row(
             "SELECT COALESCE(MAX(depth), 0) FROM files WHERE scan_id = ?1",
@@ -47,22 +40,39 @@ pub fn aggregate_recursive_sizes(conn: &Connection, scan_id: i64) -> AppResult<(
         )
         .map_err(map_sqlite)?;
 
+    tracing::info!(scan_id, max_depth, "aggregation start");
+    let agg_start = std::time::Instant::now();
+
     // Walk depth from deepest-1 up to 0, accumulating children's totals.
     for depth in (0..max_depth).rev() {
-        conn.execute(
-            "UPDATE files
-             SET recursive_size = recursive_size + COALESCE((
-                 SELECT SUM(c.recursive_size)
-                 FROM files c
-                 WHERE c.scan_id = files.scan_id
-                   AND c.parent_path = files.full_path
-             ), 0)
-             WHERE scan_id = ?1 AND depth = ?2 AND is_dir = 1",
-            params![scan_id, depth],
-        )
-        .map_err(map_sqlite)?;
+        let depth_start = std::time::Instant::now();
+        let rows = conn
+            .execute(
+                "UPDATE files
+                 SET recursive_size = recursive_size + COALESCE((
+                     SELECT SUM(c.recursive_size)
+                     FROM files c
+                     WHERE c.scan_id = files.scan_id
+                       AND c.parent_path = files.full_path
+                 ), 0)
+                 WHERE scan_id = ?1 AND depth = ?2 AND is_dir = 1",
+                params![scan_id, depth],
+            )
+            .map_err(map_sqlite)?;
+        tracing::debug!(
+            scan_id,
+            depth,
+            rows,
+            ms = depth_start.elapsed().as_millis() as u64,
+            "aggregation depth"
+        );
     }
 
+    tracing::info!(
+        scan_id,
+        total_ms = agg_start.elapsed().as_millis() as u64,
+        "aggregation done"
+    );
     Ok(())
 }
 

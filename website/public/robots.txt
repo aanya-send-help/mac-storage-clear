@@ -1,0 +1,3 @@
+User-agent: *
+Allow: /
+Sitemap: https://mac-storage-clear.flek.ai/sitemap-index.xml

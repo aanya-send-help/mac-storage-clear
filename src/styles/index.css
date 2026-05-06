@@ -1,0 +1,56 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root,
+[data-theme="light"] {
+  --bg: #ffffff;
+  --surface: #f7f7f8;
+  --fg: #111111;
+  --muted: #6b7280;
+  --border: #e5e7eb;
+  --accent: #3b82f6;
+  --danger: #ef4444;
+  --success: #10b981;
+}
+
+[data-theme="dark"] {
+  --bg: #0a0a0b;
+  --surface: #131316;
+  --fg: #f5f5f5;
+  --muted: #9ca3af;
+  --border: #232328;
+  --accent: #60a5fa;
+  --danger: #f87171;
+  --success: #34d399;
+}
+
+[data-theme="pink"] {
+  --bg: #fff3f7;
+  --surface: #ffe6ee;
+  --fg: #4a1d2c;
+  --muted: #a26b80;
+  --border: #ffcfde;
+  --accent: #ec4899;
+  --danger: #e11d48;
+  --success: #16a34a;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background-color: var(--bg);
+  color: var(--fg);
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+* {
+  -webkit-tap-highlight-color: transparent;
+}

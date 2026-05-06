@@ -1,0 +1,89 @@
+---
+import Base from "../layouts/Base.astro";
+---
+
+<Base title="Support" description="Get help with Mac Storage Clear.">
+  <article class="max-w-3xl mx-auto px-6 py-16">
+    <h1 class="text-3xl font-semibold tracking-tight">Support</h1>
+
+    <section class="mt-10">
+      <h2 class="text-xl font-semibold tracking-tight">Contact</h2>
+      <p class="mt-3 text-ink/80 leading-relaxed">
+        For questions, bug reports, feature requests, or anything else:
+      </p>
+      <ul class="mt-4 space-y-2 text-ink/80">
+        <li>
+          <strong>Email:</strong>
+          <a href="mailto:support@flek.ai" class="underline">support@flek.ai</a>
+          (we typically reply within 2 business days)
+        </li>
+        <li>
+          <strong>GitHub Issues:</strong>
+          <a
+            href="https://github.com/aanya-send-help/mac-storage-clear/issues"
+            class="underline"
+            rel="noopener">github.com/aanya-send-help/mac-storage-clear/issues</a
+          >
+        </li>
+      </ul>
+    </section>
+
+    <section class="mt-12">
+      <h2 class="text-xl font-semibold tracking-tight">Frequently asked</h2>
+
+      <div class="mt-6 space-y-6">
+        <div>
+          <h3 class="font-medium">Will it delete something I need?</h3>
+          <p class="mt-1 text-sm text-ink/70 leading-relaxed">
+            Automated scans default to moving files into a 7-day quarantine, not deleting them.
+            Manual selections hard-delete by default — you choose what to delete in those cases. We
+            strongly recommend a recent Time Machine backup before any cleanup session.
+          </p>
+        </div>
+
+        <div>
+          <h3 class="font-medium">Why does the App Store version not scan other users' files?</h3>
+          <p class="mt-1 text-sm text-ink/70 leading-relaxed">
+            The Mac App Store sandbox prohibits cross-user filesystem access. If you need to clean
+            up files left behind by deleted user accounts, build the open-source version from <a
+              href="https://github.com/aanya-send-help/mac-storage-clear"
+              class="underline"
+              rel="noopener">our GitHub repo</a
+            > — that build includes a privileged helper for multi-user scans.
+          </p>
+        </div>
+
+        <div>
+          <h3 class="font-medium">Why does it want Full Disk Access?</h3>
+          <p class="mt-1 text-sm text-ink/70 leading-relaxed">
+            macOS restricts access to several user-Library subdirectories (Mail, Messages, Safari)
+            unless an app has been granted Full Disk Access. Without it, large categories of disk
+            usage are invisible to the scanner. The grant happens once in System Settings → Privacy
+            & Security → Full Disk Access.
+          </p>
+        </div>
+
+        <div>
+          <h3 class="font-medium">My disk space didn't change after I deleted files.</h3>
+          <p class="mt-1 text-sm text-ink/70 leading-relaxed">
+            APFS keeps local snapshots that hold deleted bytes for up to about 24 hours. The App
+            surfaces these via Time Machine local-snapshot tools and offers to thin them. If you've
+            also moved files to quarantine instead of hard-deleting, free space won't change until
+            you empty quarantine.
+          </p>
+        </div>
+
+        <div>
+          <h3 class="font-medium">How do I get a refund?</h3>
+          <p class="mt-1 text-sm text-ink/70 leading-relaxed">
+            App Store refunds are handled by Apple. Visit <a
+              href="https://reportaproblem.apple.com"
+              class="underline"
+              rel="noopener">reportaproblem.apple.com</a
+            > to request one.
+          </p>
+        </div>
+      </div>
+    </section>
+  </article>
+</Base>

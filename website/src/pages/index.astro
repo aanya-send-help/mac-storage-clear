@@ -1,0 +1,88 @@
+---
+import Base from "../layouts/Base.astro";
+import Feature from "../components/Feature.astro";
+---
+
+<Base title="Mac Storage Clear">
+  <section class="max-w-5xl mx-auto px-6 pt-20 pb-16">
+    <div class="max-w-3xl">
+      <h1 class="text-4xl md:text-5xl font-semibold tracking-tight leading-[1.1]">
+        See what's eating your Mac's storage. Clear it with confidence.
+      </h1>
+      <p class="mt-6 text-lg text-ink/70 leading-relaxed">
+        Apple Silicon-native disk visualizer. Find duplicate dev directories, manage screenshots,
+        identify large files and stale projects. Quarantine first, hard-delete when you're sure.
+        Open source. No telemetry. Ever.
+      </p>
+      <div class="mt-10 flex flex-wrap gap-4 items-center">
+        <a
+          href="#"
+          aria-disabled="true"
+          class="inline-flex items-center gap-2 px-5 py-3 bg-ink text-paper rounded-lg font-medium opacity-60 cursor-not-allowed"
+        >
+          Download on the Mac App Store · coming soon
+        </a>
+        <a
+          href="https://github.com/aanya-send-help/mac-storage-clear"
+          class="inline-flex items-center gap-2 px-5 py-3 border border-ink/15 rounded-lg font-medium hover:border-ink/40"
+          rel="noopener"
+        >
+          Build from source →
+        </a>
+      </div>
+      <p class="mt-4 text-sm text-ink/50">
+        $9.99 one-time on the App Store. Free if you build it yourself. Same app either way.
+      </p>
+    </div>
+  </section>
+
+  <section id="features" class="max-w-5xl mx-auto px-6 py-16 border-t border-black/5">
+    <h2 class="text-2xl font-semibold tracking-tight">What it does</h2>
+    <div class="mt-8 grid md:grid-cols-2 gap-6">
+      <Feature
+        title="Treemap visualization"
+        body="Interactive map of every directory under your home and Library. Click to drill in, color-coded by category."
+      />
+      <Feature
+        title="Duplicate dev directories"
+        body="Finds node_modules, .venv, target, DerivedData, and __pycache__ across stale projects. Knows the difference between local artifacts and shared package caches."
+      />
+      <Feature
+        title="Screenshot manager"
+        body="Gallery view for every Screen Shot on your desktop. Bulk delete or one-by-one with keyboard shortcuts."
+      />
+      <Feature
+        title="Stale-project detection"
+        body="Cross-references git log, lockfile age, and remote sync to surface projects you haven't touched in 90+ days that are safe to clean."
+      />
+      <Feature
+        title="APFS clone aware"
+        body="Detects copy-on-write clones so we never inflate your potential savings with bytes that aren't actually duplicated."
+      />
+      <Feature
+        title="Quarantine first"
+        body="Automated cleanups move files to a 7-day quarantine before any unlink. Manual selections hard-delete by default — your call."
+      />
+    </div>
+  </section>
+
+  <section class="max-w-5xl mx-auto px-6 py-16 border-t border-black/5">
+    <h2 class="text-2xl font-semibold tracking-tight">Open source by default</h2>
+    <div class="mt-6 text-ink/70 leading-relaxed max-w-3xl space-y-4">
+      <p>
+        Mac Storage Clear is MIT licensed and developed in the open at <a
+          href="https://github.com/aanya-send-help/mac-storage-clear"
+          class="underline decoration-rose-400 underline-offset-4 hover:text-ink"
+          rel="noopener">github.com/aanya-send-help/mac-storage-clear</a
+        >.
+      </p>
+      <p>
+        Buying on the App Store gets you signed, notarized binaries, automatic updates, and family
+        sharing. Building from source gets you the same app for free, plus the ability to scan
+        across multiple user accounts via a privileged helper (which the App Store sandbox
+        prohibits).
+      </p>
+      <p>Either way, all your data stays on your machine. Always.</p>
+    </div>
+  </section>
+</Base>

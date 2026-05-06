@@ -1,0 +1,101 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  app:
+    name: App (${{ matrix.flavor }})
+    runs-on: macos-14
+    strategy:
+      fail-fast: false
+      matrix:
+        flavor: [devid, appstore]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+          key: ${{ matrix.flavor }}
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install npm deps
+        run: npm ci
+
+      - name: TypeScript typecheck
+        run: npm run typecheck
+
+      - name: ESLint
+        run: npm run lint
+
+      - name: Frontend build
+        run: npm run build
+
+      - name: Rust fmt check
+        run: cargo fmt --all -- --check
+
+      - name: Cargo check (${{ matrix.flavor }})
+        run: |
+          if [ "${{ matrix.flavor }}" = "appstore" ]; then
+            cargo check --workspace --no-default-features --features appstore -p mac-storage-clear
+            # Helper crate is not built for the App Store flavor.
+          else
+            cargo check --workspace --features privileged
+          fi
+
+      - name: Clippy (${{ matrix.flavor }})
+        run: |
+          if [ "${{ matrix.flavor }}" = "appstore" ]; then
+            cargo clippy --no-default-features --features appstore -p mac-storage-clear -- -D warnings
+          else
+            cargo clippy --workspace --features privileged -- -D warnings
+          fi
+
+      - name: Cargo test (${{ matrix.flavor }})
+        run: |
+          if [ "${{ matrix.flavor }}" = "appstore" ]; then
+            cargo test --no-default-features --features appstore -p mac-storage-clear
+          else
+            cargo test --workspace --features privileged
+          fi
+
+  website:
+    name: Website
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./website
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: website/package-lock.json
+
+      - name: Install
+        run: npm ci
+
+      - name: Build
+        run: npm run build

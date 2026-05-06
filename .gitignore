@@ -1,0 +1,70 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+._*
+
+# Editors
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+.idea/
+*.swp
+*.swo
+*~
+.zed/
+.claude/
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+pnpm-lock.yaml.bak
+
+# Build outputs
+dist/
+build/
+*.tsbuildinfo
+.vite/
+
+# Rust / Tauri
+target/
+src-tauri/target/
+src-tauri/Cargo.lock.bak
+
+# Tauri build artifacts
+src-tauri/gen/
+*.dmg
+*.pkg
+*.app
+
+# Astro
+website/dist/
+website/.astro/
+
+# Environment / secrets
+.env
+.env.local
+.env.*.local
+*.p12
+*.p8
+*.cer
+*.mobileprovision
+*.provisionprofile
+keychain-*.db
+
+# OS
+Thumbs.db
+
+# Logs
+logs/
+*.log
+
+# Local app data (just in case)
+*.sqlite
+*.sqlite-journal
+*.sqlite-shm
+*.sqlite-wal

@@ -1,0 +1,66 @@
+name: Release (Mac App Store)
+
+# Triggered by tags like appstore-v0.1.0. Builds the sandboxed App Store flavor,
+# signs with Apple Distribution + Mac Installer Distribution certs, packages a
+# .pkg, and uploads to App Store Connect for manual submission to App Review.
+#
+# Status: STUB. Remove `if: false` in Phase 6 once provisioning profiles + IAP
+# wiring are in place. See docs/DISTRIBUTION.md.
+
+on:
+  push:
+    tags:
+      - "appstore-v*"
+  workflow_dispatch:
+
+jobs:
+  build-and-upload:
+    if: false # remove in Phase 6
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install npm deps
+        run: npm ci
+
+      - name: Import certs and provisioning profile
+        env:
+          DIST_CERT_P12: ${{ secrets.APPLE_DIST_CERT_P12 }}
+          DIST_CERT_PASSWORD: ${{ secrets.APPLE_DIST_CERT_PASSWORD }}
+          MAS_INSTALLER_CERT_P12: ${{ secrets.APPLE_MAS_INSTALLER_CERT_P12 }}
+          MAS_INSTALLER_CERT_PASSWORD: ${{ secrets.APPLE_MAS_INSTALLER_CERT_PASSWORD }}
+          PROVISIONING_PROFILE: ${{ secrets.APPLE_PROVISIONING_PROFILE_APPSTORE }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          echo "TODO: import certs + install provisioning profile"
+
+      - name: Build App Store bundle
+        run: npm run tauri:build:appstore
+
+      - name: Sign and package as .pkg
+        run: |
+          # codesign --force --options runtime --timestamp \
+          #   --sign "Apple Distribution: ..." \
+          #   --entitlements src-tauri/entitlements.appstore.plist \
+          #   src-tauri/target/release/bundle/macos/*.app
+          # productbuild --sign "3rd Party Mac Developer Installer: ..." \
+          #   --component ... ./out.pkg
+          echo "TODO: sign and pkg"
+
+      - name: Upload to App Store Connect
+        env:
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_KEY_ISSUER: ${{ secrets.APPLE_API_KEY_ISSUER }}
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+        run: |
+          # xcrun altool --upload-package out.pkg --apple-id ... --type macos
+          echo "TODO: upload"

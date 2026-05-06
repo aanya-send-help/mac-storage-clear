@@ -1,0 +1,40 @@
+[package]
+name = "mac-storage-clear"
+description = "Fast, native disk visualizer and cleanup app for Apple Silicon Macs"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+name = "mac_storage_clear_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+tauri-plugin-os = "2"
+tauri-plugin-store = "2"
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+rusqlite = { version = "0.31", features = ["bundled"] }
+rayon = "1.10"
+blake3 = "1.5"
+parking_lot = "0.12"
+
+[features]
+# Default to dev-ID build (full-power) for local development.
+default = ["privileged"]
+# Dev-ID build: privileged helper enabled, multi-user scanning, system caches.
+privileged = []
+# App Store build: sandboxed; mutually exclusive with `privileged` at packaging time
+# (CI passes `--no-default-features --features appstore`).
+appstore = []

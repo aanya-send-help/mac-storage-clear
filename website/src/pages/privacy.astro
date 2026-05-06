@@ -1,0 +1,109 @@
+---
+import Base from "../layouts/Base.astro";
+---
+
+<Base
+  title="Privacy Policy"
+  description="Mac Storage Clear privacy policy. We collect nothing. All data stays on your machine."
+>
+  <article class="max-w-3xl mx-auto px-6 py-16 prose prose-neutral">
+    <h1 class="text-3xl font-semibold tracking-tight">Privacy Policy</h1>
+    <p class="text-sm text-ink/60">
+      <strong>Effective Date:</strong> May 6, 2026<br />
+      <strong>Last Updated:</strong> May 6, 2026
+    </p>
+
+    <h2 class="text-xl font-semibold mt-10">Introduction</h2>
+    <p class="text-ink/80 leading-relaxed">
+      This Privacy Policy describes how Ishan Sharma, operating as Mirelle (d/b/a flek.ai)
+      ("Mirelle," "we," "us," or "our") handles your information when you use the Mac Storage Clear
+      application ("the App") and our website at <a
+        href="https://mac-storage-clear.flek.ai"
+        class="underline">mac-storage-clear.flek.ai</a
+      > (collectively, the "Service").
+    </p>
+    <p class="text-ink/80 leading-relaxed mt-3">
+      The short version: <strong
+        >Mac Storage Clear is a fully local desktop application. It does not collect, transmit, or
+        store any personal data on our servers. We have no servers.</strong
+      >
+    </p>
+
+    <h2 class="text-xl font-semibold mt-10">Information We Do Not Collect</h2>
+    <p class="text-ink/80 leading-relaxed">
+      The App does not collect, transmit, or share any of the following with us or any third party:
+    </p>
+    <ul class="list-disc pl-6 mt-2 text-ink/80 space-y-1">
+      <li>Personal identifiers (name, email, phone number, account ID)</li>
+      <li>File contents, file names, or file paths from your disk</li>
+      <li>Scan results, deletion history, or quarantine contents</li>
+      <li>Device identifiers (UDID, MAC address, advertising identifier)</li>
+      <li>IP address, location, or network information</li>
+      <li>Usage analytics, crash reports (beyond Apple-provided ones), or telemetry</li>
+      <li>Any information from third-party SDKs (we ship none)</li>
+    </ul>
+
+    <h2 class="text-xl font-semibold mt-10">Data That Stays on Your Mac</h2>
+    <p class="text-ink/80 leading-relaxed">
+      The App necessarily reads file metadata (sizes, timestamps, names, paths) to perform its
+      function. <strong>This information never leaves your Mac.</strong> Specifically:
+    </p>
+    <ul class="list-disc pl-6 mt-2 text-ink/80 space-y-1">
+      <li>
+        Scan results are stored in a local SQLite database under <code
+          class="text-sm bg-black/5 px-1.5 py-0.5 rounded"
+          >~/Library/Application Support/Mac Storage Clear/</code
+        >
+      </li>
+      <li>
+        Quarantined files are moved (not copied) to <code
+          class="text-sm bg-black/5 px-1.5 py-0.5 rounded">~/Library/Application Support/Mac Storage
+          Clear/quarantine/</code
+        >
+      </li>
+      <li>Theme, layout, and scan preferences are stored in macOS user defaults</li>
+    </ul>
+
+    <h2 class="text-xl font-semibold mt-10">Apple-Provided Information</h2>
+    <p class="text-ink/80 leading-relaxed">
+      If you obtained the App from the Mac App Store, Apple may provide us aggregate, anonymized
+      information about installs, ratings, and territory of purchase, governed by Apple's own
+      privacy practices. We do not receive any individually identifiable information about you from
+      Apple. Apple's standard Mac App Store privacy practices apply: see Apple's <a
+        href="https://www.apple.com/legal/privacy/"
+        class="underline"
+        rel="noopener">Privacy Policy</a
+      >.
+    </p>
+    <p class="text-ink/80 leading-relaxed mt-3">
+      If you choose to send a crash report through Apple's crash reporting system, that report goes
+      to Apple under Apple's policies. We can view aggregated, anonymized crash data in App Store
+      Connect, which we use solely to fix bugs.
+    </p>
+
+    <h2 class="text-xl font-semibold mt-10">Children</h2>
+    <p class="text-ink/80 leading-relaxed">
+      The App is rated 4+ in the Mac App Store. We do not knowingly collect personal information
+      from anyone, including children, because we do not collect personal information at all.
+    </p>
+
+    <h2 class="text-xl font-semibold mt-10">Changes to This Policy</h2>
+    <p class="text-ink/80 leading-relaxed">
+      We may update this Privacy Policy from time to time. When we do, we will update the "Last
+      Updated" date at the top of this page. Material changes will be announced via the project
+      GitHub repository and the App Store release notes.
+    </p>
+
+    <h2 class="text-xl font-semibold mt-10">Contact</h2>
+    <p class="text-ink/80 leading-relaxed">
+      <strong>Email:</strong>
+      <a href="mailto:support@flek.ai" class="underline">support@flek.ai</a><br />
+      <strong>Address:</strong> Ishan Sharma, operating as Mirelle (d/b/a flek.ai), No. 78, 4th
+      Cross, 7th Block, Koramangala, Bengaluru Urban, Karnataka, 560095, India<br />
+      <strong>Source code:</strong>
+      <a href="https://github.com/aanya-send-help/mac-storage-clear" class="underline" rel="noopener"
+        >github.com/aanya-send-help/mac-storage-clear</a
+      >
+    </p>
+  </article>
+</Base>

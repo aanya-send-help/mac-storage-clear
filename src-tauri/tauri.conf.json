@@ -1,0 +1,50 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Mac Storage Clear",
+  "version": "0.1.0",
+  "identifier": "ai.flek.macstorageclear",
+  "build": {
+    "frontendDist": "../dist",
+    "devUrl": "http://localhost:1420",
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Mac Storage Clear",
+        "width": 1280,
+        "height": 820,
+        "minWidth": 960,
+        "minHeight": 600,
+        "fullscreen": false,
+        "resizable": true,
+        "decorations": true,
+        "titleBarStyle": "Visible"
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: asset: https://asset.localhost; connect-src 'self' ipc: http://ipc.localhost; font-src 'self' data:"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["app", "dmg"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.png"
+    ],
+    "category": "Utility",
+    "shortDescription": "Disk visualizer and cleanup for Apple Silicon Macs",
+    "longDescription": "Visualize your Mac's storage as an interactive treemap. Find duplicate dev directories, manage screenshots, identify large files and stale projects. Apple Silicon native, MIT licensed.",
+    "copyright": "Copyright (c) 2026 Ishan Sharma (Mirelle, d/b/a flek.ai). MIT licensed.",
+    "macOS": {
+      "minimumSystemVersion": "13.0",
+      "frameworks": [],
+      "exceptionDomain": ""
+    }
+  }
+}

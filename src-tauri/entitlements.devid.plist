@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Direct-download (Developer ID) build. NOT sandboxed. -->
+    <!-- Hardened Runtime is enabled by Tauri at build time. -->
+
+    <!-- Allow unsigned executable memory. The privileged helper is signed
+         separately with the same Team ID; library validation is loosened so the
+         main app can spawn it without entitlement mismatches. -->
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+
+    <!-- Required for some Tauri / WKWebView functionality. -->
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+
+    <!-- Authorization Services for spawning the privileged helper. -->
+    <!-- (Authorization framework needs no entitlement; here for documentation.) -->
+</dict>
+</plist>

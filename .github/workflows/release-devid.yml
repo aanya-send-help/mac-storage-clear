@@ -1,0 +1,72 @@
+name: Release (Developer ID)
+
+# Triggered by tags like v0.1.0. Builds the dev-ID flavor (full-power), signs
+# with Developer ID Application + Installer certs, notarizes via notarytool,
+# attaches a .dmg to the GitHub Release.
+#
+# Status: STUB. Wire up secrets and remove the explicit `if: false` guards in
+# Phase 6 once icons + signing infra are ready. See docs/DISTRIBUTION.md.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+jobs:
+  build-and-release:
+    if: false # remove in Phase 6
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install npm deps
+        run: npm ci
+
+      - name: Import code-signing certificates
+        env:
+          DEVID_APP_CERT_P12: ${{ secrets.APPLE_DEVID_APP_CERT_P12 }}
+          DEVID_APP_CERT_PASSWORD: ${{ secrets.APPLE_DEVID_APP_CERT_PASSWORD }}
+          DEVID_INSTALLER_CERT_P12: ${{ secrets.APPLE_DEVID_INSTALLER_CERT_P12 }}
+          DEVID_INSTALLER_CERT_PASSWORD: ${{ secrets.APPLE_DEVID_INSTALLER_CERT_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          # See docs/DISTRIBUTION.md for the exact certificate setup steps.
+          echo "TODO: import certs into ephemeral keychain"
+
+      - name: Build dev-ID bundle
+        run: npm run tauri:build:devid
+
+      - name: Sign helper binary
+        run: |
+          # codesign --force --options runtime --timestamp \
+          #   --sign "Developer ID Application: ..." \
+          #   --entitlements src-tauri/entitlements.devid.plist \
+          #   path/to/helper
+          echo "TODO: sign helper"
+
+      - name: Notarize
+        env:
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_KEY_ISSUER: ${{ secrets.APPLE_API_KEY_ISSUER }}
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+        run: |
+          # xcrun notarytool submit ... --wait
+          # xcrun stapler staple ...
+          echo "TODO: notarize"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            src-tauri/target/release/bundle/dmg/*.dmg
+          generate_release_notes: true

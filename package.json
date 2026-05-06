@@ -23,7 +23,7 @@
     "@tauri-apps/plugin-store": "^2.1.0",
     "@tanstack/react-virtual": "^3.10.9",
     "d3-hierarchy": "^3.1.2",
-    "react": "^18.3.1",
+    "react": "^19.2.5",
     "react-dom": "^18.3.1",
     "zustand": "^4.5.5"
   },
@@ -31,7 +31,7 @@
     "@tauri-apps/cli": "^2.1.0",
     "@types/d3-hierarchy": "^3.1.7",
     "@types/node": "^22.9.0",
-    "@types/react": "^18.3.12",
+    "@types/react": "^19.2.14",
     "@types/react-dom": "^18.3.1",
     "@typescript-eslint/eslint-plugin": "^7.18.0",
     "@typescript-eslint/parser": "^7.18.0",

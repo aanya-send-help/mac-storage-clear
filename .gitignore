@@ -45,6 +45,7 @@ website/dist/
 website/.astro/
 # Auto-copied during prebuild from scripts/
 website/public/scripts/
+website/public/claim.sh
 
 # Environment / secrets
 .env

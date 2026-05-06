@@ -1,5 +1,6 @@
 ---
 import Base from "../layouts/Base.astro";
+import CopyableCommand from "../components/CopyableCommand.astro";
 ---
 
 <Base title="Support" description="Get help with Mac Storage Clear.">
@@ -65,28 +66,36 @@ import Base from "../layouts/Base.astro";
           <p class="mt-1 text-sm text-ink/70 leading-relaxed">
             macOS lets you delete a user account but keep their home folder. The kept folder
             stays owned by the deleted account's UID, so your account can't read those files
-            even with Full Disk Access. To transfer ownership in one step, run our helper
-            script:
-          </p>
-          <pre
-            class="mt-3 bg-black/5 rounded p-3 text-xs overflow-x-auto"><code>curl -fsSL https://mac-storage-clear.flek.ai/scripts/claim-orphaned-home.sh -o /tmp/claim-orphaned-home.sh
-chmod +x /tmp/claim-orphaned-home.sh
-sudo /tmp/claim-orphaned-home.sh &lt;deleted-username&gt;
-# e.g. sudo /tmp/claim-orphaned-home.sh flek</code></pre>
-          <p class="mt-2 text-sm text-ink/70 leading-relaxed">
-            The script transfers ownership of <code class="text-xs bg-black/5 px-1 rounded"
-              >/Users/&lt;name&gt;</code
-            > to the user who invoked sudo. It refuses to act outside <code
+            even with Full Disk Access. To transfer ownership, run this one-liner in Terminal —
+            it prompts for your admin password, lists every orphaned home directory under <code
               class="text-xs bg-black/5 px-1 rounded">/Users</code
-            >, refuses if a user with that name still exists, and prompts before touching
-            anything. It's a small, auditable shell script — read it on <a
+            >, and lets you pick which to claim:
+          </p>
+          <div class="mt-4">
+            <CopyableCommand
+              command="curl -fsSL https://mac-storage-clear.flek.ai/claim.sh | sudo bash"
+            />
+          </div>
+          <p class="mt-3 text-sm text-ink/70 leading-relaxed">
+            The script refuses to act outside <code class="text-xs bg-black/5 px-1 rounded"
+              >/Users</code
+            >, refuses if a user with that name still exists in DirectoryService, and prompts
+            before touching anything. Read it on <a
               href="https://github.com/aanya-send-help/mac-storage-clear/blob/main/scripts/claim-orphaned-home.sh"
               class="underline"
               rel="noopener">GitHub</a
-            > before running it.
+            > before running.
           </p>
-          <p class="mt-2 text-sm text-ink/70 leading-relaxed">
-            We deliberately ship this as a separate script rather than building it into the app —
+          <p class="mt-3 text-sm text-ink/70 leading-relaxed">
+            If you already know the username and want to skip the picker:
+          </p>
+          <div class="mt-3">
+            <CopyableCommand
+              command="sudo bash <(curl -fsSL https://mac-storage-clear.flek.ai/claim.sh) flek"
+            />
+          </div>
+          <p class="mt-3 text-sm text-ink/70 leading-relaxed">
+            We deliberately keep this as a separate script rather than building it into the app —
             ownership transfer is a one-shot operation that shouldn't live behind a permission
             prompt every time you launch the app.
           </p>

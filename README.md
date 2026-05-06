@@ -68,18 +68,23 @@ mac-storage-clear/
 
 ## Cleaning up after deleted user accounts
 
-If you deleted a macOS user account but their home folder still exists in `/Users/`, those files are still owned by the deleted user's UID and unreadable by your account. Even with Full Disk Access, the App Store build of Mac Storage Clear can't touch them — Unix permissions block reads of files you don't own.
+If you deleted a macOS user account but kept their home folder, those files are still owned by the deleted UID and unreadable by your account — even with Full Disk Access, since Unix permissions still apply.
 
-Use the `claim-orphaned-home.sh` script to transfer ownership of those files to your account once. After that the App Store build (with FDA + a user-granted folder for `/Users`) can scan and delete them normally:
+Run the one-liner below in Terminal. It lists every orphaned home directory under `/Users` and lets you pick which to claim:
 
 ```sh
-sudo ./scripts/claim-orphaned-home.sh <deleted-username>
-# e.g. sudo ./scripts/claim-orphaned-home.sh flek
+curl -fsSL https://mac-storage-clear.flek.ai/claim.sh | sudo bash
 ```
 
-The script refuses to operate outside `/Users`, refuses if a user account with that name still exists, and prompts before changing anything. It's intentionally a separate script — not bundled inside the app — because escalation of privilege is a one-shot operation that doesn't belong in a sandboxed UI.
+To skip the picker and chown a specific account directly:
 
-You don't need to clone the repo to run it; it's also linked from [mac-storage-clear.flek.ai/support](https://mac-storage-clear.flek.ai/support).
+```sh
+sudo bash <(curl -fsSL https://mac-storage-clear.flek.ai/claim.sh) flek
+```
+
+Read the script before running: [`scripts/claim-orphaned-home.sh`](./scripts/claim-orphaned-home.sh). It refuses to operate outside `/Users`, refuses if a user with that name still exists in DirectoryService, and prompts before touching anything.
+
+It's intentionally a separate script — not bundled inside the app — because privilege escalation belongs at the terminal layer, not behind a sandboxed UI.
 
 ## Contributing
 

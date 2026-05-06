@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "astro dev",
     "start": "astro dev",
-    "prebuild": "mkdir -p public/scripts && cp ../scripts/claim-orphaned-home.sh public/scripts/",
+    "prebuild": "mkdir -p public/scripts && cp ../scripts/claim-orphaned-home.sh public/scripts/ && cp ../scripts/claim-orphaned-home.sh public/claim.sh",
     "build": "astro check && astro build",
     "preview": "astro preview",
     "astro": "astro"

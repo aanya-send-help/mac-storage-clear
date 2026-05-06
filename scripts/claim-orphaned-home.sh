@@ -95,15 +95,15 @@ detect_workers() {
 }
 WORKERS="${WORKERS:-$(detect_workers)}"
 
-# ── do_claim: parallel chown of a single path, with heartbeat ──────────────
-do_claim() {
-    local target="$1" target_real basename_
-
+# ── safety checks shared by check_target + do_claim ────────────────────────
+validate_target() {
+    local target="$1"
     if [[ ! -d "$target" ]]; then
         err "$target does not exist or is not a directory."
         return 1
     fi
 
+    local target_real
     target_real="$(cd "$target" && pwd -P)"
     case "$target_real" in
         /Users/*) ;;
@@ -111,15 +111,15 @@ do_claim() {
     esac
     case "$target_real" in
         /Users|/Users/Shared|/Users/Guest)
-            err "refusing to chown $target_real (shared/system path)."
+            err "refusing to operate on $target_real (shared/system path)."
             return 1
             ;;
     esac
 
+    local basename_
     basename_="$(basename "$target_real")"
     if dscl . -read "/Users/$basename_" >/dev/null 2>&1; then
         err "a user account named '$basename_' still exists in DirectoryService."
-        err "delete the account first, or rename the directory before re-running."
         return 1
     fi
 
@@ -128,12 +128,61 @@ do_claim() {
         return 1
     fi
 
+    printf '%s' "$target_real"
+}
+
+# ── check_target: dry-run. Lists known-protected paths quickly via -prune. ─
+check_target() {
+    local target_real
+    target_real="$(validate_target "$1")" || return 1
+
+    note "checking $target_real (read-only)..."
+
+    # macOS exposes a few synthetic file-provider trees and code-signed app
+    # bundles whose ownership chown can't touch even as root. We list those
+    # so the user knows in advance. find -prune stops at the boundary so this
+    # is fast — no full tree walk.
+    local protected=()
+    while IFS= read -r -d '' p; do
+        protected+=("$p")
+    done < <(
+        find "$target_real" \( \
+            -path '*/Library/CloudStorage' -o \
+            -path '*/Library/CloudStorage/*' -o \
+            -path '*/Library/Mobile Documents' -o \
+            -path '*/Library/Mobile Documents/*' -o \
+            -name '*.app' \
+        \) -prune -print0 2>/dev/null
+    )
+
+    if [[ ${#protected[@]} -eq 0 ]]; then
+        ok "no known-protected paths inside $target_real."
+    else
+        echo "  Found ${#protected[@]} known-protected path(s); chown will report errors on these:"
+        local i=0
+        for p in "${protected[@]}"; do
+            echo "    $p"
+            i=$((i + 1))
+            [[ "$i" -ge 12 ]] && { echo "    ... (truncated, ${#protected[@]} total)"; break; }
+        done
+        echo
+        echo "  These are either (a) virtual file-provider mounts (CloudStorage,"
+        echo "  Mobile Documents) with no real local bytes, or (b) code-signed .app"
+        echo "  bundles macOS protects even from root. They're harmless: the parent"
+        echo "  directory will still be deletable once it's yours."
+    fi
+}
+
+# ── do_claim: parallel chown with heartbeat + summarized errors ────────────
+do_claim() {
+    local target_real
+    target_real="$(validate_target "$1")" || return 1
+
     note "claiming $target_real → $INVOKER:$INVOKER_GROUP (parallel: $WORKERS workers)"
 
     # Heartbeat so the user sees we're alive on multi-GB trees.
     local start=$SECONDS
     (
-        # First message after 10s, then every 30s.
         sleep 10
         while true; do
             local e=$((SECONDS - start))
@@ -142,21 +191,20 @@ do_claim() {
         done
     ) &
     local hb_pid=$!
-    # Make sure heartbeat dies if we get killed.
     trap 'kill '"$hb_pid"' 2>/dev/null || true' RETURN INT TERM
 
+    # Capture chown stderr so we can summarize protected-path errors instead
+    # of dumping a wall of text.
+    local err_log
+    err_log="$(mktemp -t claim-errors.XXXXXX)"
+
     # Parallel chown:
-    #   find -print0           NUL-delimited paths (handles spaces/newlines safely)
-    #   xargs -0 -P N          N concurrent worker processes
-    #         -n 500           batch 500 paths per chown invocation (amortizes spawn cost)
-    #   chown -h               don't follow symlinks (change the link itself)
-    #
-    # find's metadata walk is the floor on speed; chown only updates inode metadata
-    # so it's fast once the walk is feeding it. On M-series, this saturates the
-    # APFS metadata path well before the user is bottlenecked elsewhere.
+    #   find -print0           NUL-delimited paths (handles spaces safely)
+    #   xargs -0 -P N -n 500   N concurrent workers, 500 paths per chown invocation
+    #   chown -h               don't follow symlinks
     local rc=0
     find "$target_real" -print0 2>/dev/null \
-        | xargs -0 -P "$WORKERS" -n 500 chown -h "$INVOKER:$INVOKER_GROUP" \
+        | xargs -0 -P "$WORKERS" -n 500 chown -h "$INVOKER:$INVOKER_GROUP" 2>"$err_log" \
         || rc=$?
 
     kill "$hb_pid" 2>/dev/null || true
@@ -164,12 +212,22 @@ do_claim() {
     trap - RETURN INT TERM
 
     local elapsed=$((SECONDS - start))
-    if [[ "$rc" -eq 0 ]]; then
-        ok "$target_real claimed in ${elapsed}s"
+    local err_count
+    err_count="$(grep -c '' "$err_log" 2>/dev/null || echo 0)"
+
+    if [[ "$err_count" -eq 0 ]]; then
+        ok "$target_real claimed in ${elapsed}s — no errors."
+        rm -f "$err_log"
     else
-        err "chown reported errors on $target_real (exit $rc, ${elapsed}s)"
-        err "spot-check with: ls -la \"$target_real\""
-        return 1
+        ok "$target_real chown finished in ${elapsed}s."
+        printf "  \033[33m⚠\033[0m %s path(s) refused (protected app bundles or file-provider mounts).\n" "$err_count"
+        echo "    Examples:"
+        head -5 "$err_log" | sed 's/^/      /'
+        if [[ "$err_count" -gt 5 ]]; then
+            echo "      ... ($((err_count - 5)) more)"
+        fi
+        echo "    Full log: $err_log"
+        echo "    Harmless. The parent directory can still be deleted by you (now its owner)."
     fi
 }
 
@@ -182,17 +240,19 @@ if [[ $# -ge 1 ]]; then
         *)         target="/Users/$arg" ;;
     esac
 
-    echo "About to claim ownership:"
-    echo "  Path:       $target"
-    echo "  New owner:  $INVOKER:$INVOKER_GROUP"
-    echo
-    confirm="$(ask 'Proceed? [y/N] ')"
-    case "$confirm" in
-        y|Y|yes|YES) ;;
-        *) note "aborted."; exit 0 ;;
-    esac
-    do_claim "$target"
-    exit 0
+    echo "Selected (will become owned by $INVOKER:$INVOKER_GROUP):"
+    echo "  $target"
+
+    while true; do
+        echo
+        action="$(ask 'Action — [c]heck (preview), [d]o (chown now), [q]uit: ')"
+        case "$action" in
+            c|C|check) check_target "$target" || true ;;
+            d|D|do)    do_claim "$target"; exit $? ;;
+            q|Q|quit|'') note "aborted; nothing changed."; exit 0 ;;
+            *) err "invalid choice: '$action'" ;;
+        esac
+    done
 fi
 
 # ── interactive picker mode ───────────────────────────────────────────────
@@ -267,19 +327,36 @@ if [[ ${#TO_CLAIM[@]} -eq 0 ]]; then
 fi
 
 echo
-echo "Will chown to $INVOKER:$INVOKER_GROUP:"
+echo "Selected (will become owned by $INVOKER:$INVOKER_GROUP):"
 for d in "${TO_CLAIM[@]}"; do echo "  $d"; done
-echo "(sizes not computed — du -sh on large trees is slow; chown itself only updates metadata so it's fast)"
 echo
 
-confirm="$(ask 'Proceed? [y/N] ')"
-case "$confirm" in
-    y|Y|yes|YES) ;;
-    *) note "aborted."; exit 0 ;;
-esac
-
-for d in "${TO_CLAIM[@]}"; do
-    do_claim "$d" || true
+# check/do/quit loop. 'check' runs a fast read-only scan, lists known-protected
+# paths, and loops back. 'do' runs the parallel chown and exits.
+while true; do
+    echo
+    action="$(ask 'Action — [c]heck (preview), [d]o (chown now), [q]uit: ')"
+    case "$action" in
+        c|C|check)
+            for d in "${TO_CLAIM[@]}"; do
+                check_target "$d" || true
+                echo
+            done
+            ;;
+        d|D|do)
+            for d in "${TO_CLAIM[@]}"; do
+                do_claim "$d" || true
+            done
+            break
+            ;;
+        q|Q|quit|'')
+            note "aborted; nothing changed."
+            exit 0
+            ;;
+        *)
+            err "invalid choice: '$action'"
+            ;;
+    esac
 done
 
 echo

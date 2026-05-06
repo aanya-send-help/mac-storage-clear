@@ -124,9 +124,10 @@ pub fn run(
         aggregate_recursive_sizes(&conn, scan_id)?;
     }
 
-    if let Some(cb) = progress_cb.as_ref() {
-        cb(scan_handle.status());
-    }
+    // Final emit happens in the parent thread after it sets finished_at and
+    // the final status string. We deliberately don't emit here because at this
+    // point handle.status() would still report status="running".
+    let _ = (progress_cb, scan_handle);
 
     Ok(cancelled)
 }

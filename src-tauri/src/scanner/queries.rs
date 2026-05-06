@@ -67,6 +67,11 @@ pub fn aggregate_recursive_sizes(conn: &Connection, scan_id: i64) -> AppResult<(
 }
 
 /// Top-N children of a given path, sorted by recursive_size desc.
+///
+/// Note: child_count is currently 0 — the N+1 COUNT subquery this would have
+/// required was a measurable hit on click latency and the field isn't
+/// displayed anywhere. If a future view needs it, precompute on scan finalize
+/// rather than per-query.
 #[allow(dead_code)]
 pub fn treemap_children(
     conn: &Connection,
@@ -76,9 +81,7 @@ pub fn treemap_children(
 ) -> AppResult<Vec<TreemapNode>> {
     let mut stmt = conn
         .prepare(
-            "SELECT name, full_path, recursive_size, is_dir,
-                COALESCE((SELECT COUNT(*) FROM files c
-                         WHERE c.scan_id = ?1 AND c.parent_path = files.full_path), 0)
+            "SELECT name, full_path, recursive_size, is_dir
              FROM files
              WHERE scan_id = ?1 AND parent_path = ?2
              ORDER BY recursive_size DESC
@@ -93,7 +96,7 @@ pub fn treemap_children(
                 full_path: r.get(1)?,
                 size: r.get(2)?,
                 is_dir: r.get::<_, i64>(3)? != 0,
-                child_count: r.get(4)?,
+                child_count: 0,
             })
         })
         .map_err(map_sqlite)?;

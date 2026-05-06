@@ -61,6 +61,15 @@ export const useScanStore = create<ScanState>((set, get) => ({
     try {
       const roots = await invoke<string[]>("default_scan_roots");
       set({ defaultRoots: roots });
+      // Kick off treemap load for the default root once we know it. The
+      // treemap component's useEffect runs on mount (before defaultRoots
+      // arrived), so without this the treemap stays empty after a fresh
+      // app launch even when scan data is already in the DB.
+      const target = roots[0];
+      if (target && get().treemap.length === 0) {
+        set({ treemapRoot: target });
+        get().loadTreemap(target);
+      }
     } catch (e) {
       set({ error: String(e) });
     }

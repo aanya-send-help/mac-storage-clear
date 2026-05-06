@@ -1,9 +1,19 @@
+import { useEffect } from "react";
 import { useScanStore } from "../lib/scan";
 import { formatBytes, formatRelativeTime } from "../lib/format";
 
 export function LargestFiles() {
   const largest = useScanStore((s) => s.largest);
   const loading = useScanStore((s) => s.loadingLargest);
+  const loadLargest = useScanStore((s) => s.loadLargest);
+
+  useEffect(() => {
+    if (largest.length === 0 && !loading) {
+      loadLargest();
+    }
+    // We only want this on mount; manual reloads come from elsewhere.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   if (loading) {
     return <div className="text-sm text-muted p-4">Loading largest files…</div>;

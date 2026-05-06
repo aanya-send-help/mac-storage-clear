@@ -156,8 +156,10 @@ pub fn start_scan(
                     files_seen_w,
                     bytes_seen_w,
                     current_path_w,
-                    progress_cb,
-                    handle_for_progress,
+                    // No mid-flight final emit; we emit AFTER finalizer below
+                    // so the UI sees finished_at and the correct final status.
+                    progress_cb.clone(),
+                    Arc::clone(&handle_for_progress),
                 );
 
                 let now = now_unix();
@@ -176,6 +178,12 @@ pub fn start_scan(
                     }
                 };
                 *status_w.lock() = final_status;
+
+                // Emit the final status AFTER finished_at + status are set so
+                // the UI receives a payload where status != "running".
+                if let Some(cb) = progress_cb.as_ref() {
+                    cb(handle_for_progress.status());
+                }
             })
             .expect("spawn scanner-writer");
     }

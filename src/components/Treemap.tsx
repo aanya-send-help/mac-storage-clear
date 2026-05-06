@@ -1,4 +1,4 @@
-import { useRef } from "react";
+import { useEffect, useRef } from "react";
 import { hierarchy, treemap } from "d3-hierarchy";
 import { useScanStore } from "../lib/scan";
 import { formatBytes } from "../lib/format";
@@ -12,19 +12,27 @@ export function Treemap({ width = 1000, height = 520 }: Props) {
   const treemapData = useScanStore((s) => s.treemap);
   const treemapRoot = useScanStore((s) => s.treemapRoot);
   const loadTreemap = useScanStore((s) => s.loadTreemap);
+  const defaultRoots = useScanStore((s) => s.defaultRoots);
   const status = useScanStore((s) => s.status);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  // When the scan is running, no treemap data yet — show empty state.
-  if (!status || (status.status === "running" && treemapData.length === 0)) {
+  useEffect(() => {
+    if (treemapData.length === 0) {
+      const target = treemapRoot ?? defaultRoots[0];
+      if (target) loadTreemap(target);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // While a scan is running we don't aggregate, so the treemap is empty by
+  // design until completion.
+  if (status?.status === "running" && treemapData.length === 0) {
     return (
       <div
         className="rounded-lg border border-dashed border-border flex items-center justify-center text-muted text-sm"
         style={{ height }}
       >
-        {status?.status === "running"
-          ? "Scanning… treemap renders when scan finishes."
-          : "Run a scan to populate the treemap."}
+        Scanning… treemap renders when scan finishes.
       </div>
     );
   }
@@ -35,7 +43,9 @@ export function Treemap({ width = 1000, height = 520 }: Props) {
         className="rounded-lg border border-dashed border-border flex items-center justify-center text-muted text-sm"
         style={{ height }}
       >
-        No data for {treemapRoot ?? "this path"}.
+        {treemapRoot
+          ? `No data for ${treemapRoot}. Run a scan first.`
+          : "Run a scan to populate the treemap."}
       </div>
     );
   }

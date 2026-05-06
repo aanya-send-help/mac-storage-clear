@@ -3,7 +3,7 @@
 use crate::error::AppResult;
 use rusqlite::Connection;
 
-pub const CURRENT_VERSION: i32 = 1;
+pub const CURRENT_VERSION: i32 = 3;
 
 pub fn migrate(conn: &Connection) -> AppResult<()> {
     let current: i32 = conn
@@ -13,10 +13,46 @@ pub fn migrate(conn: &Connection) -> AppResult<()> {
     if current < 1 {
         migrate_to_1(conn)?;
     }
+    if current < 2 {
+        migrate_to_2(conn)?;
+    }
+    if current < 3 {
+        migrate_to_3(conn)?;
+    }
 
     conn.pragma_update(None, "user_version", CURRENT_VERSION)
         .map_err(|e| crate::error::AppError::Sqlite(e.to_string()))?;
 
+    Ok(())
+}
+
+fn migrate_to_2(conn: &Connection) -> AppResult<()> {
+    // Partial index for the "largest files" query. Filters baked into the
+    // index so SQLite doesn't have to scan + filter 3M+ rows.
+    let sql = r#"
+        CREATE INDEX IF NOT EXISTS files_own_size_files
+            ON files(scan_id, size DESC)
+            WHERE is_dir = 0 AND is_clone = 0;
+    "#;
+    conn.execute_batch(sql)
+        .map_err(|e| crate::error::AppError::Sqlite(e.to_string()))?;
+    Ok(())
+}
+
+fn migrate_to_3(conn: &Connection) -> AppResult<()> {
+    // Covering index for the treemap drill-in query:
+    //   WHERE scan_id=? AND parent_path=? ORDER BY recursive_size DESC LIMIT N
+    //
+    // Without this, SQLite picked files_size (scan_id, recursive_size DESC)
+    // and scanned every row in the scan to filter by parent_path. This index
+    // satisfies both the equality filter and the sort in one go, and
+    // includes is_dir so the SELECT is index-only.
+    let sql = r#"
+        CREATE INDEX IF NOT EXISTS files_drill_in
+            ON files(scan_id, parent_path, recursive_size DESC, is_dir);
+    "#;
+    conn.execute_batch(sql)
+        .map_err(|e| crate::error::AppError::Sqlite(e.to_string()))?;
     Ok(())
 }
 

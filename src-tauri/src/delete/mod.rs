@@ -335,11 +335,15 @@ fn run_delete(
     // query per file would hold the DB lock for the entire delete duration
     // and starve every UI query.
     if !deleted_paths.is_empty() {
+        *current_path.lock() = Some("Pruning index…".to_string());
+        progress_cb(handle.snapshot());
         prune_batch(&conn, &deleted_paths)?;
     }
 
     // Quarantine records are written in a single transaction too.
     if !quarantine_records.is_empty() {
+        *current_path.lock() = Some("Recording quarantine…".to_string());
+        progress_cb(handle.snapshot());
         record_quarantine_batch(&conn, &quarantine_records, now, expires_at)?;
     }
 

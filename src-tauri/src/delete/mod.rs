@@ -24,7 +24,11 @@ const QUARANTINE_RETENTION_DAYS: i64 = 7;
 #[derive(Debug, Clone, Copy, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum DeleteMode {
+    /// Move to the macOS system Trash (Finder restore-able).
+    Trash,
+    /// Move to our app's quarantine (7-day auto-purge, restore-able from this UI).
     Quarantine,
+    /// Immediate `unlink` / `remove_dir_all`.
     Hard,
 }
 
@@ -89,6 +93,7 @@ pub fn delete_paths(
         };
 
         let outcome = match mode {
+            DeleteMode::Trash => trash_one(&path),
             DeleteMode::Quarantine => quarantine_one(&path, &quarantine_dir, now),
             DeleteMode::Hard => hard_delete_one(&path),
         };
@@ -153,6 +158,16 @@ fn hard_delete_one(path: &Path) -> std::io::Result<QuarantineRecord> {
     } else {
         std::fs::remove_file(path)?;
     }
+    Ok(QuarantineRecord {
+        quarantine_path: PathBuf::new(),
+    })
+}
+
+/// Move to the macOS system Trash. Uses NSFileManager.trashItem under the
+/// hood (via the `trash` crate), which preserves the "Put Back" metadata so
+/// Finder can restore the file to its original location later.
+fn trash_one(path: &Path) -> std::io::Result<QuarantineRecord> {
+    trash::delete(path).map_err(|e| std::io::Error::other(format!("trash: {e}")))?;
     Ok(QuarantineRecord {
         quarantine_path: PathBuf::new(),
     })

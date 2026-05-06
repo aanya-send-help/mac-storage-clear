@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useScanStore, type DeleteMode } from "../lib/scan";
 import { formatBytes, formatRelativeTime } from "../lib/format";
+import { DeleteMenu, deletePromptCopy } from "./DeleteMenu";
 
 export function CategoryDetail({ categoryId }: { categoryId: string }) {
   const items = useScanStore((s) => s.categoryItems[categoryId] ?? []);
@@ -87,24 +88,11 @@ export function CategoryDetail({ categoryId }: { categoryId: string }) {
               : `${selected.size} selected · ${formatBytes(selectedSize)}`}
           </span>
         </label>
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={() => requestDelete("quarantine")}
-            disabled={selected.size === 0 || pending !== null}
-            className="px-3 py-1.5 text-xs font-medium border border-border rounded-md hover:bg-surface disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            Move to quarantine
-          </button>
-          <button
-            type="button"
-            onClick={() => requestDelete("hard")}
-            disabled={selected.size === 0 || pending !== null}
-            className="px-3 py-1.5 text-xs font-medium bg-danger text-white rounded-md hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            Delete now
-          </button>
-        </div>
+        <DeleteMenu
+          disabled={selected.size === 0 || pending !== null}
+          trigger={<>Delete{pending ? "ing…" : "…"}</>}
+          onPick={(mode) => requestDelete(mode)}
+        />
       </div>
 
       {lastResult && (
@@ -113,42 +101,36 @@ export function CategoryDetail({ categoryId }: { categoryId: string }) {
         </div>
       )}
 
-      {confirm && (
-        <div className="px-4 py-3 bg-danger/5 border-y border-danger/20 flex items-center justify-between gap-3">
-          <div className="text-xs">
-            {confirm === "quarantine" ? (
-              <>
-                Move <strong>{selected.size}</strong> item
-                {selected.size === 1 ? "" : "s"} ({formatBytes(selectedSize)}) to quarantine?
-                Recoverable for 7 days.
-              </>
-            ) : (
-              <>
-                Permanently delete <strong>{selected.size}</strong> item
-                {selected.size === 1 ? "" : "s"} ({formatBytes(selectedSize)})? This can't be
-                undone.
-              </>
-            )}
-          </div>
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => setConfirm(null)}
-              className="px-3 py-1 text-xs border border-border rounded hover:bg-surface"
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              onClick={performDelete}
-              disabled={pending !== null}
-              className="px-3 py-1 text-xs bg-danger text-white rounded hover:opacity-90 disabled:opacity-50"
-            >
-              {pending ? "Working…" : "Confirm"}
-            </button>
-          </div>
-        </div>
-      )}
+      {confirm &&
+        (() => {
+          const { question, buttonLabel, buttonClass } = deletePromptCopy(
+            confirm,
+            selected.size,
+            formatBytes(selectedSize),
+          );
+          return (
+            <div className="px-4 py-3 bg-surface/60 border-y border-border flex items-center justify-between gap-3">
+              <div className="text-xs">{question}</div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setConfirm(null)}
+                  className="px-3 py-1 text-xs border border-border rounded hover:bg-bg"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={performDelete}
+                  disabled={pending !== null}
+                  className={`px-3 py-1 text-xs rounded hover:opacity-90 disabled:opacity-50 ${buttonClass}`}
+                >
+                  {pending ? "Working…" : buttonLabel}
+                </button>
+              </div>
+            </div>
+          );
+        })()}
 
       <div className="max-h-[480px] overflow-y-auto">
         <table className="w-full text-sm">

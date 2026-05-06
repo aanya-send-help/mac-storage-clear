@@ -64,7 +64,7 @@ export interface CategoryItem {
   group: string | null;
 }
 
-export type DeleteMode = "quarantine" | "hard";
+export type DeleteMode = "trash" | "quarantine" | "hard";
 
 export interface DeleteResult {
   freed: number;

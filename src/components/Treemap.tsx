@@ -1,8 +1,9 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { hierarchy, treemap } from "d3-hierarchy";
-import { useScanStore } from "../lib/scan";
+import { useScanStore, type DeleteMode } from "../lib/scan";
 import { formatBytes } from "../lib/format";
 import { Breadcrumbs } from "./Breadcrumbs";
+import { DeleteMenu, deletePromptCopy } from "./DeleteMenu";
 
 interface Props {
   width?: number;
@@ -36,10 +37,24 @@ export function Treemap({ width = 1000, height = 520 }: Props) {
   const treemapData = useScanStore((s) => s.treemap);
   const treemapRoot = useScanStore((s) => s.treemapRoot);
   const loadTreemap = useScanStore((s) => s.loadTreemap);
+  const deleteItems = useScanStore((s) => s.deleteItems);
   const defaultRoots = useScanStore((s) => s.defaultRoots);
   const status = useScanStore((s) => s.status);
   const loading = useScanStore((s) => s.loadingTreemap);
   const containerRef = useRef<HTMLDivElement>(null);
+
+  // Treemap selection: paths the user has Cmd/Shift-clicked. Plain click
+  // still drills in; the modifier turns the click into a multi-select toggle.
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [confirm, setConfirm] = useState<DeleteMode | null>(null);
+  const [pending, setPending] = useState(false);
+  const [lastResult, setLastResult] = useState<string | null>(null);
+
+  // Reset selection when the user navigates to a different path.
+  useEffect(() => {
+    setSelected(new Set());
+    setLastResult(null);
+  }, [treemapRoot]);
 
   useEffect(() => {
     if (treemapData.length === 0) {
@@ -48,6 +63,33 @@ export function Treemap({ width = 1000, height = 520 }: Props) {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const selectedSize = useMemo(
+    () =>
+      treemapData
+        .filter((n) => selected.has(n.full_path))
+        .reduce((acc, n) => acc + n.size, 0),
+    [treemapData, selected],
+  );
+
+  const performDelete = async () => {
+    if (!confirm) return;
+    setPending(true);
+    const paths = Array.from(selected);
+    const result = await deleteItems(paths, confirm);
+    setPending(false);
+    setConfirm(null);
+    setSelected(new Set());
+    setLastResult(
+      result.errors.length === 0
+        ? `Freed ${formatBytes(result.freed)} (${result.deleted.length} item${
+            result.deleted.length === 1 ? "" : "s"
+          })`
+        : `${result.deleted.length} ok, ${result.errors.length} failed: ${result.errors[0]?.message ?? ""}`,
+    );
+    // Re-fetch so the just-deleted tiles disappear from the view.
+    if (treemapRoot) loadTreemap(treemapRoot);
+  };
 
   const totalSize = treemapData.reduce((acc, n) => acc + n.size, 0);
   // The breadcrumb root is the deepest path that's a prefix of every scan
@@ -118,10 +160,66 @@ export function Treemap({ width = 1000, height = 520 }: Props) {
           rootPath={rootForCrumbs}
           onNavigate={(p) => loadTreemap(p)}
         />
-        <div className="text-xs text-muted whitespace-nowrap">
-          {treemapData.length} entries · {formatBytes(totalSize)}
-        </div>
+        {selected.size === 0 ? (
+          <div className="text-xs text-muted whitespace-nowrap">
+            {treemapData.length} entries · {formatBytes(totalSize)}
+            <span className="ml-3 text-muted/60">⌘/⇧-click to select</span>
+          </div>
+        ) : (
+          <div className="flex items-center gap-3 whitespace-nowrap">
+            <span className="text-xs">
+              <strong>{selected.size}</strong> selected · {formatBytes(selectedSize)}
+            </span>
+            <button
+              type="button"
+              onClick={() => setSelected(new Set())}
+              className="text-xs text-muted hover:text-fg"
+            >
+              Clear
+            </button>
+            <DeleteMenu
+              disabled={pending}
+              trigger={<>Delete{pending ? "ing…" : "…"}</>}
+              onPick={(mode) => setConfirm(mode)}
+            />
+          </div>
+        )}
       </div>
+      {confirm &&
+        (() => {
+          const { question, buttonLabel, buttonClass } = deletePromptCopy(
+            confirm,
+            selected.size,
+            formatBytes(selectedSize),
+          );
+          return (
+            <div className="px-4 py-3 bg-surface/60 border-b border-border flex items-center justify-between gap-3">
+              <div className="text-xs">{question}</div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setConfirm(null)}
+                  className="px-3 py-1 text-xs border border-border rounded hover:bg-bg"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={performDelete}
+                  disabled={pending}
+                  className={`px-3 py-1 text-xs rounded hover:opacity-90 disabled:opacity-50 ${buttonClass}`}
+                >
+                  {pending ? "Working…" : buttonLabel}
+                </button>
+              </div>
+            </div>
+          );
+        })()}
+      {lastResult && (
+        <div className="px-4 py-2 text-xs text-success bg-success/10 border-b border-success/20">
+          {lastResult}
+        </div>
+      )}
       <div className="relative">
         <svg width={width} height={height} className="block">
           {leaves.map((leaf) => {
@@ -140,29 +238,39 @@ export function Treemap({ width = 1000, height = 520 }: Props) {
             const fill = colorForName(data.name);
             const showLabel = w > 80 && h > 28;
             const clickable = data.is_dir;
+            const isSelected = selected.has(data.full_path);
             return (
               <g
                 key={data.full_path}
                 transform={`translate(${x},${y})`}
-                className={
-                  clickable
-                    ? "cursor-pointer hover:opacity-80 transition-opacity"
-                    : "cursor-default"
-                }
-                onClick={() => {
-                  if (clickable) loadTreemap(data.full_path);
+                className="cursor-pointer hover:opacity-90 transition-opacity"
+                onClick={(e) => {
+                  if (e.metaKey || e.ctrlKey || e.shiftKey) {
+                    // Multi-select toggle.
+                    setSelected((prev) => {
+                      const next = new Set(prev);
+                      if (next.has(data.full_path)) next.delete(data.full_path);
+                      else next.add(data.full_path);
+                      return next;
+                    });
+                  } else if (clickable) {
+                    loadTreemap(data.full_path);
+                  } else {
+                    // Plain click on a file: select it (so user can act).
+                    setSelected(new Set([data.full_path]));
+                  }
                 }}
               >
                 <title>
                   {data.full_path} · {formatBytes(data.size)}
-                  {clickable ? " · click to drill in" : ""}
+                  {clickable ? " · click to drill, ⌘-click to select" : " · click to select"}
                 </title>
                 <rect
                   width={w}
                   height={h}
                   fill={fill}
-                  stroke="rgba(0,0,0,0.15)"
-                  strokeWidth={0.5}
+                  stroke={isSelected ? "#0f0f10" : "rgba(0,0,0,0.15)"}
+                  strokeWidth={isSelected ? 3 : 0.5}
                 />
                 {showLabel && (
                   <>

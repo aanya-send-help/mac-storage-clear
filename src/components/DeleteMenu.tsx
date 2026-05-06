@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import type { DeleteMode } from "../lib/scan";
 
 interface Props {
@@ -36,12 +37,30 @@ const OPTIONS: {
 
 export function DeleteMenu({ trigger, disabled, onPick }: Props) {
   const [open, setOpen] = useState(false);
-  const containerRef = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState<{ top: number; right: number } | null>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const popoverRef = useRef<HTMLDivElement>(null);
+
+  // Position the popover under the trigger using viewport coordinates so the
+  // overflow-hidden of any ancestor (e.g. the treemap container) doesn't clip
+  // the menu.
+  useLayoutEffect(() => {
+    if (!open || !triggerRef.current) return;
+    const r = triggerRef.current.getBoundingClientRect();
+    setPos({
+      top: r.bottom + 4,
+      right: window.innerWidth - r.right,
+    });
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
     const handler = (e: MouseEvent) => {
-      if (!containerRef.current?.contains(e.target as Node)) {
+      const target = e.target as Node;
+      if (
+        !triggerRef.current?.contains(target) &&
+        !popoverRef.current?.contains(target)
+      ) {
         setOpen(false);
       }
     };
@@ -57,8 +76,9 @@ export function DeleteMenu({ trigger, disabled, onPick }: Props) {
   }, [open]);
 
   return (
-    <div ref={containerRef} className="relative inline-block">
+    <>
       <button
+        ref={triggerRef}
         type="button"
         disabled={disabled}
         onClick={() => setOpen((o) => !o)}
@@ -67,25 +87,32 @@ export function DeleteMenu({ trigger, disabled, onPick }: Props) {
         {trigger}
         <span className="text-muted">▾</span>
       </button>
-      {open && (
-        <div className="absolute right-0 mt-1 w-72 rounded-lg border border-border bg-bg shadow-lg z-20 overflow-hidden">
-          {OPTIONS.map((opt) => (
-            <button
-              key={opt.mode}
-              type="button"
-              onClick={() => {
-                setOpen(false);
-                onPick(opt.mode);
-              }}
-              className={`w-full text-left px-3 py-2 text-sm border-b border-border last:border-b-0 ${opt.cls}`}
-            >
-              <div className="font-medium">{opt.label}</div>
-              <div className="text-xs text-muted mt-0.5">{opt.hint}</div>
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
+      {open &&
+        pos &&
+        createPortal(
+          <div
+            ref={popoverRef}
+            className="fixed w-72 rounded-lg border border-border bg-bg shadow-lg z-50 overflow-hidden"
+            style={{ top: pos.top, right: pos.right }}
+          >
+            {OPTIONS.map((opt) => (
+              <button
+                key={opt.mode}
+                type="button"
+                onClick={() => {
+                  setOpen(false);
+                  onPick(opt.mode);
+                }}
+                className={`w-full text-left px-3 py-2 text-sm border-b border-border last:border-b-0 ${opt.cls}`}
+              >
+                <div className="font-medium">{opt.label}</div>
+                <div className="text-xs text-muted mt-0.5">{opt.hint}</div>
+              </button>
+            ))}
+          </div>,
+          document.body,
+        )}
+    </>
   );
 }
 

@@ -1,27 +1,34 @@
-//! Delete pipeline — quarantine (move into our app container, restorable
-//! within 7 days) or hard delete (immediate `unlink` / `remove_dir_all`).
+//! Delete pipeline — async with progress + cancellation + batched prune.
 //!
-//! Quarantine target lives at:
-//!   `<app_data_dir>/quarantine/<unix_ts>-<sanitized_name>`
+//! Delete runs on a background thread; the Tauri command returns a delete_id
+//! immediately and the UI listens for `delete:progress` / `delete:finished`
+//! events. This keeps the IPC thread free during multi-GB deletes that would
+//! otherwise hang the UI.
 //!
-//! When the source is on the same APFS volume as the quarantine (always true
-//! for paths under `~`), the move is a metadata-only `rename(2)` — fast and
-//! atomic, no copying. Cross-volume sources fall through to hard-delete in
-//! Phase 2.0; cross-volume quarantine is left for a later phase.
+//! Three modes:
+//!   - Trash      → macOS system Trash via `trash` crate (NSFileManager)
+//!   - Quarantine → atomic rename(2) into our app data dir, restorable for 7 days
+//!   - Hard       → immediate `unlink` / `remove_dir_all`
 //!
-//! After every successful delete we also prune the matching rows from the
-//! `files` table so category summaries stay accurate without a re-scan.
+//! Index rows for deleted paths are pruned in a single batched transaction
+//! at the end so per-item work stays fast (we'd otherwise hold the DB lock
+//! during every iteration, blocking every other UI query).
 
 use crate::app_state::AppState;
 use crate::error::{AppError, AppResult};
+use parking_lot::Mutex;
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
+use std::sync::Arc;
+use std::thread;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const QUARANTINE_RETENTION_DAYS: i64 = 7;
+const PROGRESS_INTERVAL: Duration = Duration::from_millis(250);
 
-#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum DeleteMode {
     /// Move to the macOS system Trash (Finder restore-able).
@@ -33,48 +40,195 @@ pub enum DeleteMode {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct DeleteResult {
-    pub freed: i64,
-    pub deleted: Vec<String>,
-    pub errors: Vec<DeleteError>,
-}
-
-#[derive(Debug, Clone, Serialize)]
 pub struct DeleteError {
     pub path: String,
     pub message: String,
 }
 
-pub fn delete_paths(
+#[derive(Debug, Clone, Serialize)]
+pub struct DeleteStatus {
+    pub delete_id: i64,
+    pub mode: DeleteMode,
+    pub status: String, // "running" | "done" | "cancelled" | "failed"
+    pub files_seen: u64,
+    pub bytes_freed: i64,
+    pub total_files: i64,
+    pub current_path: Option<String>,
+    pub errors: Vec<DeleteError>,
+    pub started_at: u64,
+    pub finished_at: Option<u64>,
+    pub elapsed_ms: u64,
+}
+
+/// Result returned synchronously when the caller starts a delete.
+#[derive(Debug, Clone, Serialize)]
+pub struct StartDeleteResult {
+    pub delete_id: i64,
+    pub total_files: i64,
+}
+
+#[allow(dead_code)]
+pub struct DeleteHandle {
+    pub delete_id: i64,
+    pub mode: DeleteMode,
+    cancel: Arc<AtomicBool>,
+    files_seen: Arc<AtomicU64>,
+    bytes_freed: Arc<AtomicI64>,
+    current_path: Arc<Mutex<Option<String>>>,
+    status: Arc<Mutex<String>>,
+    errors: Arc<Mutex<Vec<DeleteError>>>,
+    started_at: u64,
+    finished_at: Arc<Mutex<Option<u64>>>,
+    total_files: i64,
+}
+
+impl DeleteHandle {
+    pub fn cancel(&self) {
+        self.cancel.store(true, Ordering::Release);
+    }
+
+    pub fn snapshot(&self) -> DeleteStatus {
+        let started_at = self.started_at;
+        let finished_at = *self.finished_at.lock();
+        let elapsed_ms = match finished_at {
+            Some(f) => f.saturating_sub(started_at).saturating_mul(1000),
+            None => now_unix().saturating_sub(started_at).saturating_mul(1000),
+        };
+        DeleteStatus {
+            delete_id: self.delete_id,
+            mode: self.mode,
+            status: self.status.lock().clone(),
+            files_seen: self.files_seen.load(Ordering::Acquire),
+            bytes_freed: self.bytes_freed.load(Ordering::Acquire),
+            total_files: self.total_files,
+            current_path: self.current_path.lock().clone(),
+            errors: self.errors.lock().clone(),
+            started_at,
+            finished_at,
+            elapsed_ms,
+        }
+    }
+}
+
+pub fn start_delete(
     state: &AppState,
     paths: Vec<String>,
     mode: DeleteMode,
-) -> AppResult<DeleteResult> {
-    let mut result = DeleteResult {
-        freed: 0,
-        deleted: Vec::new(),
-        errors: Vec::new(),
-    };
+    progress_cb: Arc<dyn Fn(DeleteStatus) + Send + Sync>,
+) -> AppResult<Arc<DeleteHandle>> {
+    if paths.is_empty() {
+        return Err(AppError::Scan("no paths to delete".into()));
+    }
+
+    let started_at = now_unix();
+    let total_files = paths.len() as i64;
+    let next_id = next_delete_id();
+
+    let cancel = Arc::new(AtomicBool::new(false));
+    let files_seen = Arc::new(AtomicU64::new(0));
+    let bytes_freed = Arc::new(AtomicI64::new(0));
+    let current_path = Arc::new(Mutex::new(None::<String>));
+    let finished_at = Arc::new(Mutex::new(None::<u64>));
+    let status = Arc::new(Mutex::new("running".to_string()));
+    let errors: Arc<Mutex<Vec<DeleteError>>> = Arc::new(Mutex::new(Vec::new()));
+
+    let handle = Arc::new(DeleteHandle {
+        delete_id: next_id,
+        mode,
+        cancel: Arc::clone(&cancel),
+        files_seen: Arc::clone(&files_seen),
+        bytes_freed: Arc::clone(&bytes_freed),
+        current_path: Arc::clone(&current_path),
+        status: Arc::clone(&status),
+        errors: Arc::clone(&errors),
+        started_at,
+        finished_at: Arc::clone(&finished_at),
+        total_files,
+    });
 
     let quarantine_dir = state.data_dir.join("quarantine");
     if matches!(mode, DeleteMode::Quarantine) {
         std::fs::create_dir_all(&quarantine_dir)?;
     }
 
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
+    let conn = state.index.conn();
+    let handle_clone = Arc::clone(&handle);
+
+    thread::Builder::new()
+        .name("delete-worker".into())
+        .spawn(move || {
+            let result = run_delete(
+                paths,
+                mode,
+                quarantine_dir,
+                conn,
+                cancel,
+                files_seen,
+                bytes_freed,
+                current_path,
+                Arc::clone(&errors),
+                progress_cb.clone(),
+                Arc::clone(&handle_clone),
+            );
+
+            *finished_at.lock() = Some(now_unix());
+            let final_status = match result {
+                Ok(was_cancelled) => {
+                    if was_cancelled {
+                        "cancelled".to_string()
+                    } else {
+                        "done".to_string()
+                    }
+                }
+                Err(e) => {
+                    tracing::error!(?e, "delete worker failed");
+                    errors.lock().push(DeleteError {
+                        path: String::new(),
+                        message: e.to_string(),
+                    });
+                    "failed".to_string()
+                }
+            };
+            *status.lock() = final_status;
+            progress_cb(handle_clone.snapshot());
+        })
+        .expect("spawn delete-worker");
+
+    Ok(handle)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_delete(
+    paths: Vec<String>,
+    mode: DeleteMode,
+    quarantine_dir: PathBuf,
+    conn: Arc<Mutex<rusqlite::Connection>>,
+    cancel: Arc<AtomicBool>,
+    files_seen: Arc<AtomicU64>,
+    bytes_freed: Arc<AtomicI64>,
+    current_path: Arc<Mutex<Option<String>>>,
+    errors: Arc<Mutex<Vec<DeleteError>>>,
+    progress_cb: Arc<dyn Fn(DeleteStatus) + Send + Sync>,
+    handle: Arc<DeleteHandle>,
+) -> AppResult<bool> {
+    let now = now_unix() as i64;
     let expires_at = now + QUARANTINE_RETENTION_DAYS * 86_400;
 
-    for raw in paths {
-        let path = PathBuf::from(&raw);
+    let mut deleted_paths: Vec<String> = Vec::with_capacity(paths.len());
+    let mut last_progress = Instant::now();
+    let mut quarantine_records: Vec<(String, PathBuf, i64)> = Vec::new();
 
-        // Refuse anything that doesn't live inside /Users — the categories
-        // we ship in Phase 2.0 only ever produce paths there, so this guard
-        // catches a misuse before it can chew on system files.
+    for raw in paths {
+        if cancel.load(Ordering::Acquire) {
+            break;
+        }
+
+        *current_path.lock() = Some(raw.clone());
+        files_seen.fetch_add(1, Ordering::AcqRel);
+
+        let path = PathBuf::from(&raw);
         if !path.starts_with("/Users/") {
-            result.errors.push(DeleteError {
+            errors.lock().push(DeleteError {
                 path: raw,
                 message: "refusing to delete outside /Users".into(),
             });
@@ -84,7 +238,7 @@ pub fn delete_paths(
         let size = match path_size(&path) {
             Ok(s) => s,
             Err(e) => {
-                result.errors.push(DeleteError {
+                errors.lock().push(DeleteError {
                     path: raw,
                     message: format!("stat: {e}"),
                 });
@@ -99,46 +253,45 @@ pub fn delete_paths(
         };
 
         match outcome {
-            Ok(QuarantineRecord { quarantine_path }) => {
+            Ok(qpath) => {
                 if matches!(mode, DeleteMode::Quarantine) {
-                    if let Err(e) =
-                        record_quarantine(state, &raw, &quarantine_path, size, now, expires_at)
-                    {
-                        // Quarantine row failed but the move succeeded —
-                        // surface the error and try to roll back the move.
-                        let _ = std::fs::rename(&quarantine_path, &path);
-                        result.errors.push(DeleteError {
-                            path: raw,
-                            message: format!("record quarantine: {e}"),
-                        });
-                        continue;
-                    }
+                    quarantine_records.push((raw.clone(), qpath, size));
                 }
-                let _ = prune_indexed(state, &raw);
-                result.freed += size;
-                result.deleted.push(raw);
+                bytes_freed.fetch_add(size, Ordering::AcqRel);
+                deleted_paths.push(raw);
             }
             Err(e) => {
-                result.errors.push(DeleteError {
+                errors.lock().push(DeleteError {
                     path: raw,
                     message: e.to_string(),
                 });
             }
         }
+
+        if last_progress.elapsed() >= PROGRESS_INTERVAL {
+            progress_cb(handle.snapshot());
+            last_progress = Instant::now();
+        }
     }
 
-    Ok(result)
+    // Batched prune of all deleted paths in a single transaction. Doing one
+    // query per file would hold the DB lock for the entire delete duration
+    // and starve every UI query.
+    if !deleted_paths.is_empty() {
+        prune_batch(&conn, &deleted_paths)?;
+    }
+
+    // Quarantine records are written in a single transaction too.
+    if !quarantine_records.is_empty() {
+        record_quarantine_batch(&conn, &quarantine_records, now, expires_at)?;
+    }
+
+    Ok(cancel.load(Ordering::Acquire))
 }
 
-struct QuarantineRecord {
-    quarantine_path: PathBuf,
-}
+// ── per-mode operations ────────────────────────────────────────────────────
 
-fn quarantine_one(
-    src: &Path,
-    quarantine_dir: &Path,
-    now: i64,
-) -> std::io::Result<QuarantineRecord> {
+fn quarantine_one(src: &Path, quarantine_dir: &Path, now: i64) -> std::io::Result<PathBuf> {
     let name = src
         .file_name()
         .and_then(|n| n.to_str())
@@ -146,40 +299,28 @@ fn quarantine_one(
     let safe = name.replace('/', "_");
     let dest = quarantine_dir.join(format!("{now}-{safe}"));
     std::fs::rename(src, &dest)?;
-    Ok(QuarantineRecord {
-        quarantine_path: dest,
-    })
+    Ok(dest)
 }
 
-fn hard_delete_one(path: &Path) -> std::io::Result<QuarantineRecord> {
+fn hard_delete_one(path: &Path) -> std::io::Result<PathBuf> {
     let metadata = std::fs::symlink_metadata(path)?;
     if metadata.is_dir() && !metadata.file_type().is_symlink() {
         std::fs::remove_dir_all(path)?;
     } else {
         std::fs::remove_file(path)?;
     }
-    Ok(QuarantineRecord {
-        quarantine_path: PathBuf::new(),
-    })
+    Ok(PathBuf::new())
 }
 
-/// Move to the macOS system Trash. Uses NSFileManager.trashItem under the
-/// hood (via the `trash` crate), which preserves the "Put Back" metadata so
-/// Finder can restore the file to its original location later.
-fn trash_one(path: &Path) -> std::io::Result<QuarantineRecord> {
+fn trash_one(path: &Path) -> std::io::Result<PathBuf> {
     trash::delete(path).map_err(|e| std::io::Error::other(format!("trash: {e}")))?;
-    Ok(QuarantineRecord {
-        quarantine_path: PathBuf::new(),
-    })
+    Ok(PathBuf::new())
 }
 
 fn path_size(path: &Path) -> std::io::Result<i64> {
     use std::os::unix::fs::MetadataExt;
     let meta = std::fs::symlink_metadata(path)?;
     if meta.is_dir() {
-        // Directory size is the sum of descendant allocated bytes. For
-        // category items this is small enough to compute directly; for
-        // thousands of items the caller can fall back to indexed sizes.
         let mut total: i64 = 0;
         let mut stack = vec![path.to_path_buf()];
         while let Some(dir) = stack.pop() {
@@ -201,45 +342,61 @@ fn path_size(path: &Path) -> std::io::Result<i64> {
     }
 }
 
-fn record_quarantine(
-    state: &AppState,
-    original_path: &str,
-    quarantine_path: &Path,
-    size: i64,
-    now: i64,
-    expires_at: i64,
-) -> AppResult<()> {
-    let conn = state.index.conn();
-    let conn = conn.lock();
-    conn.execute(
-        "INSERT INTO quarantine
-            (original_path, quarantine_path, deleted_at, expires_at, size)
-         VALUES (?1, ?2, ?3, ?4, ?5)",
-        params![
-            original_path,
-            quarantine_path.display().to_string(),
-            now,
-            expires_at,
-            size,
-        ],
-    )
-    .map_err(|e| AppError::Sqlite(e.to_string()))?;
+// ── batched DB writes ──────────────────────────────────────────────────────
+
+fn prune_batch(conn: &Arc<Mutex<rusqlite::Connection>>, paths: &[String]) -> AppResult<()> {
+    let mut conn = conn.lock();
+    let tx = conn
+        .transaction()
+        .map_err(|e| AppError::Sqlite(e.to_string()))?;
+    {
+        let mut stmt = tx
+            .prepare("DELETE FROM files WHERE full_path = ?1 OR full_path LIKE ?2")
+            .map_err(|e| AppError::Sqlite(e.to_string()))?;
+        for p in paths {
+            let prefix = format!("{p}/%");
+            stmt.execute(params![p, prefix])
+                .map_err(|e| AppError::Sqlite(e.to_string()))?;
+        }
+    }
+    tx.commit().map_err(|e| AppError::Sqlite(e.to_string()))?;
     Ok(())
 }
 
-fn prune_indexed(state: &AppState, deleted_path: &str) -> AppResult<()> {
-    // Remove the row for the deleted path AND any descendants — covers
-    // recursive directory deletes.
-    let conn = state.index.conn();
-    let conn = conn.lock();
-    let prefix = format!("{deleted_path}/%");
-    conn.execute(
-        "DELETE FROM files WHERE full_path = ?1 OR full_path LIKE ?2",
-        params![deleted_path, prefix],
-    )
-    .map_err(|e| AppError::Sqlite(e.to_string()))?;
+fn record_quarantine_batch(
+    conn: &Arc<Mutex<rusqlite::Connection>>,
+    records: &[(String, PathBuf, i64)],
+    now: i64,
+    expires_at: i64,
+) -> AppResult<()> {
+    let mut conn = conn.lock();
+    let tx = conn
+        .transaction()
+        .map_err(|e| AppError::Sqlite(e.to_string()))?;
+    {
+        let mut stmt = tx
+            .prepare(
+                "INSERT INTO quarantine
+                    (original_path, quarantine_path, deleted_at, expires_at, size)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+            )
+            .map_err(|e| AppError::Sqlite(e.to_string()))?;
+        for (original, quarantine, size) in records {
+            stmt.execute(params![
+                original,
+                quarantine.display().to_string(),
+                now,
+                expires_at,
+                size,
+            ])
+            .map_err(|e| AppError::Sqlite(e.to_string()))?;
+        }
+    }
+    tx.commit().map_err(|e| AppError::Sqlite(e.to_string()))?;
     Ok(())
 }
+
+// ── quarantine browsing / restore / empty (sync, fast operations) ─────────
 
 #[derive(Debug, Clone, Serialize)]
 pub struct QuarantineEntry {
@@ -278,6 +435,13 @@ pub fn list_quarantine(state: &AppState) -> AppResult<Vec<QuarantineEntry>> {
         out.push(r.map_err(|e| AppError::Sqlite(e.to_string()))?);
     }
     Ok(out)
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DeleteResult {
+    pub freed: i64,
+    pub deleted: Vec<String>,
+    pub errors: Vec<DeleteError>,
 }
 
 pub fn restore_from_quarantine(state: &AppState, ids: Vec<i64>) -> AppResult<DeleteResult> {
@@ -344,11 +508,7 @@ pub fn restore_from_quarantine(state: &AppState, ids: Vec<i64>) -> AppResult<Del
 }
 
 pub fn empty_quarantine(state: &AppState, older_than_days: Option<i64>) -> AppResult<DeleteResult> {
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
-
+    let now = now_unix() as i64;
     let entries = list_quarantine(state)?;
     let mut result = DeleteResult {
         freed: 0,
@@ -387,4 +547,19 @@ pub fn empty_quarantine(state: &AppState, older_than_days: Option<i64>) -> AppRe
     }
 
     Ok(result)
+}
+
+// ── helpers ─────────────────────────────────────────────────────────────────
+
+fn now_unix() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+static NEXT_DELETE_ID: AtomicI64 = AtomicI64::new(1);
+
+fn next_delete_id() -> i64 {
+    NEXT_DELETE_ID.fetch_add(1, Ordering::AcqRel)
 }

@@ -81,6 +81,26 @@ export interface QuarantineEntry {
   size: number;
 }
 
+export interface DeleteStatus {
+  delete_id: number;
+  mode: DeleteMode;
+  status: "running" | "done" | "cancelled" | "failed";
+  files_seen: number;
+  bytes_freed: number;
+  total_files: number;
+  current_path: string | null;
+  errors: { path: string; message: string }[];
+  started_at: number;
+  finished_at: number | null;
+  elapsed_ms: number;
+}
+
+export interface LogEntry {
+  ts: number;
+  level: "info" | "warn" | "error";
+  message: string;
+}
+
 interface ScanState {
   status: ScanStatus | null;
   defaultRoots: string[];
@@ -95,6 +115,8 @@ interface ScanState {
   loadingCategoryItems: Record<string, boolean>;
   quarantine: QuarantineEntry[];
   loadingQuarantine: boolean;
+  deleteStatus: DeleteStatus | null;
+  logs: LogEntry[];
   error: string | null;
 
   loadDefaultRoots: () => Promise<void>;
@@ -105,12 +127,16 @@ interface ScanState {
   loadLargest: (limit?: number) => Promise<void>;
   loadCategories: () => Promise<void>;
   loadCategoryItems: (id: string, limit?: number) => Promise<void>;
-  deleteItems: (paths: string[], mode: DeleteMode) => Promise<DeleteResult>;
+  startDelete: (paths: string[], mode: DeleteMode) => Promise<{ delete_id: number } | null>;
+  cancelDelete: () => Promise<void>;
   loadQuarantine: () => Promise<void>;
   restoreFromQuarantine: (ids: number[]) => Promise<DeleteResult>;
   emptyQuarantine: (olderThanDays?: number) => Promise<DeleteResult>;
   refreshAll: () => Promise<void>;
   initEvents: () => Promise<UnlistenFn>;
+  /** True iff a delete is currently running. UI uses this to disable other delete actions. */
+  isDeleting: () => boolean;
+  log: (level: LogEntry["level"], message: string) => void;
 }
 
 export const useScanStore = create<ScanState>((set, get) => ({
@@ -127,6 +153,8 @@ export const useScanStore = create<ScanState>((set, get) => ({
   loadingCategoryItems: {},
   quarantine: [],
   loadingQuarantine: false,
+  deleteStatus: null,
+  logs: [],
   error: null,
 
   async loadDefaultRoots() {
@@ -239,17 +267,44 @@ export const useScanStore = create<ScanState>((set, get) => ({
     }
   },
 
-  async deleteItems(paths, mode) {
+  async startDelete(paths, mode) {
     try {
-      const result = await invoke<DeleteResult>("delete_items", { paths, mode });
-      // Refresh category summaries — counts will have changed.
-      get().loadCategories();
-      // If we just quarantined something, refresh that too.
-      if (mode === "quarantine") get().loadQuarantine();
-      return result;
+      get().log("info", `Starting ${mode} on ${paths.length} item${paths.length === 1 ? "" : "s"}`);
+      const result = await invoke<{ delete_id: number; total_files: number }>(
+        "start_delete",
+        { paths, mode },
+      );
+      // Seed an immediate "running" status so the UI doesn't have to wait
+      // for the first event tick.
+      set({
+        deleteStatus: {
+          delete_id: result.delete_id,
+          mode,
+          status: "running",
+          files_seen: 0,
+          bytes_freed: 0,
+          total_files: result.total_files,
+          current_path: null,
+          errors: [],
+          started_at: Math.floor(Date.now() / 1000),
+          finished_at: null,
+          elapsed_ms: 0,
+        },
+      });
+      return { delete_id: result.delete_id };
     } catch (e) {
       set({ error: String(e) });
-      return { freed: 0, deleted: [], errors: [{ path: "", message: String(e) }] };
+      get().log("error", `Delete failed to start: ${e}`);
+      return null;
+    }
+  },
+
+  async cancelDelete() {
+    try {
+      await invoke<void>("cancel_delete");
+      get().log("info", "Cancel requested");
+    } catch (e) {
+      set({ error: String(e) });
     }
   },
 
@@ -312,9 +367,41 @@ export const useScanStore = create<ScanState>((set, get) => ({
       get().loadLargest();
       get().loadCategories();
     });
+    const unsubDeleteProgress = await listen<DeleteStatus>("delete:progress", (e) => {
+      set({ deleteStatus: e.payload });
+    });
+    const unsubDeleteFinished = await listen<DeleteStatus>("delete:finished", (e) => {
+      const s = e.payload;
+      set({ deleteStatus: s });
+      const summary =
+        s.errors.length === 0
+          ? `${s.status}: freed ${s.bytes_freed} bytes (${s.files_seen}/${s.total_files} items)`
+          : `${s.status}: ${s.files_seen}/${s.total_files} items, ${s.errors.length} error${s.errors.length === 1 ? "" : "s"}`;
+      get().log(s.errors.length === 0 ? "info" : "warn", summary);
+      // Refresh affected views.
+      const root = get().treemapRoot ?? get().defaultRoots[0];
+      if (root) get().loadTreemap(root);
+      get().loadCategories();
+      if (s.mode === "quarantine") get().loadQuarantine();
+    });
     return () => {
       unsubProgress();
       unsubFinished();
+      unsubDeleteProgress();
+      unsubDeleteFinished();
     };
+  },
+
+  isDeleting() {
+    const s = get().deleteStatus;
+    return s?.status === "running";
+  },
+
+  log(level, message) {
+    set((s) => {
+      const next = [...s.logs, { ts: Date.now(), level, message }];
+      // Keep last 200 entries — that's enough to scroll back through a session.
+      return { logs: next.slice(-200) };
+    });
   },
 }));

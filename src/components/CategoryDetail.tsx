@@ -7,11 +7,10 @@ export function CategoryDetail({ categoryId }: { categoryId: string }) {
   const items = useScanStore((s) => s.categoryItems[categoryId] ?? []);
   const loading = useScanStore((s) => s.loadingCategoryItems[categoryId] ?? false);
   const loadItems = useScanStore((s) => s.loadCategoryItems);
-  const deleteItems = useScanStore((s) => s.deleteItems);
+  const startDelete = useScanStore((s) => s.startDelete);
+  const isDeleting = useScanStore((s) => s.deleteStatus?.status === "running");
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [pending, setPending] = useState<DeleteMode | null>(null);
   const [confirm, setConfirm] = useState<DeleteMode | null>(null);
-  const [lastResult, setLastResult] = useState<string | null>(null);
 
   useEffect(() => {
     if (items.length === 0 && !loading) loadItems(categoryId);
@@ -45,23 +44,10 @@ export function CategoryDetail({ categoryId }: { categoryId: string }) {
 
   const performDelete = async () => {
     if (!confirm) return;
-    setPending(confirm);
     const paths = Array.from(selected);
-    const result = await deleteItems(paths, confirm);
-    setPending(null);
+    await startDelete(paths, confirm);
     setConfirm(null);
     setSelected(new Set());
-    if (result.errors.length === 0) {
-      setLastResult(
-        `Freed ${formatBytes(result.freed)} (${result.deleted.length} item${
-          result.deleted.length === 1 ? "" : "s"
-        })`,
-      );
-    } else {
-      setLastResult(
-        `${result.deleted.length} ok, ${result.errors.length} failed. ${result.errors[0]?.message ?? ""}`,
-      );
-    }
   };
 
   if (loading && items.length === 0) {
@@ -89,17 +75,11 @@ export function CategoryDetail({ categoryId }: { categoryId: string }) {
           </span>
         </label>
         <DeleteMenu
-          disabled={selected.size === 0 || pending !== null}
-          trigger={<>Delete{pending ? "ing…" : "…"}</>}
+          disabled={selected.size === 0 || isDeleting}
+          trigger={<>Delete…</>}
           onPick={(mode) => requestDelete(mode)}
         />
       </div>
-
-      {lastResult && (
-        <div className="px-4 py-2 text-xs text-muted bg-success/10 border-y border-success/20">
-          {lastResult}
-        </div>
-      )}
 
       {confirm &&
         (() => {
@@ -122,10 +102,10 @@ export function CategoryDetail({ categoryId }: { categoryId: string }) {
                 <button
                   type="button"
                   onClick={performDelete}
-                  disabled={pending !== null}
+                  disabled={isDeleting}
                   className={`px-3 py-1 text-xs rounded hover:opacity-90 disabled:opacity-50 ${buttonClass}`}
                 >
-                  {pending ? "Working…" : buttonLabel}
+                  {isDeleting ? "Working…" : buttonLabel}
                 </button>
               </div>
             </div>

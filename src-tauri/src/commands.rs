@@ -1,6 +1,8 @@
 use crate::app_state::AppState;
 use crate::categories::{self, CategoryItem, CategorySummary};
-use crate::delete::{self, DeleteMode, DeleteResult, QuarantineEntry};
+use crate::delete::{
+    self, DeleteMode, DeleteResult, DeleteStatus, QuarantineEntry, StartDeleteResult,
+};
 use crate::error::AppError;
 use crate::scanner::{self, LargestFile, ScanConfig, ScanStatus, TreemapNode};
 use serde::Serialize;
@@ -235,27 +237,55 @@ pub fn get_category_items(
     Ok(result)
 }
 
-// ── delete pipeline ────────────────────────────────────────────────────────
+// ── delete pipeline (async) ────────────────────────────────────────────────
 
 #[tauri::command]
-pub fn delete_items(
+pub fn start_delete(
     paths: Vec<String>,
     mode: DeleteMode,
     state: State<'_, AppState>,
-) -> Result<DeleteResult, AppError> {
-    let count = paths.len();
-    let start = std::time::Instant::now();
-    let result = delete::delete_paths(&state, paths, mode)?;
-    tracing::info!(
-        requested = count,
-        deleted = result.deleted.len(),
-        errors = result.errors.len(),
-        freed = result.freed,
-        mode = ?mode,
-        total_ms = start.elapsed().as_millis() as u64,
-        "delete_items"
-    );
-    Ok(result)
+    app: AppHandle,
+) -> Result<StartDeleteResult, AppError> {
+    if let Some(active) = state.active_delete() {
+        let s = active.snapshot();
+        if s.status == "running" {
+            return Err(AppError::Scan(
+                "another delete is already in progress".into(),
+            ));
+        }
+    }
+
+    let count = paths.len() as i64;
+    let app_for_cb = app.clone();
+    let progress_cb = Arc::new(move |status: DeleteStatus| {
+        let _ = app_for_cb.emit("delete:progress", &status);
+        if status.finished_at.is_some() {
+            let _ = app_for_cb.emit("delete:finished", &status);
+        }
+    }) as Arc<dyn Fn(DeleteStatus) + Send + Sync>;
+
+    let handle = delete::start_delete(&state, paths, mode, progress_cb)?;
+    let delete_id = handle.delete_id;
+    state.set_active_delete(handle);
+
+    tracing::info!(delete_id, count, mode = ?mode, "start_delete");
+    Ok(StartDeleteResult {
+        delete_id,
+        total_files: count,
+    })
+}
+
+#[tauri::command]
+pub fn cancel_delete(state: State<'_, AppState>) -> Result<(), AppError> {
+    if let Some(handle) = state.active_delete() {
+        handle.cancel();
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn get_delete_status(state: State<'_, AppState>) -> Result<Option<DeleteStatus>, AppError> {
+    Ok(state.active_delete().map(|h| h.snapshot()))
 }
 
 #[tauri::command]

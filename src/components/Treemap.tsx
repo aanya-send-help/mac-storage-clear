@@ -37,7 +37,8 @@ export function Treemap({ width = 1000, height = 520 }: Props) {
   const treemapData = useScanStore((s) => s.treemap);
   const treemapRoot = useScanStore((s) => s.treemapRoot);
   const loadTreemap = useScanStore((s) => s.loadTreemap);
-  const deleteItems = useScanStore((s) => s.deleteItems);
+  const startDelete = useScanStore((s) => s.startDelete);
+  const isDeleting = useScanStore((s) => s.deleteStatus?.status === "running");
   const defaultRoots = useScanStore((s) => s.defaultRoots);
   const status = useScanStore((s) => s.status);
   const loading = useScanStore((s) => s.loadingTreemap);
@@ -47,13 +48,10 @@ export function Treemap({ width = 1000, height = 520 }: Props) {
   // still drills in; the modifier turns the click into a multi-select toggle.
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [confirm, setConfirm] = useState<DeleteMode | null>(null);
-  const [pending, setPending] = useState(false);
-  const [lastResult, setLastResult] = useState<string | null>(null);
 
   // Reset selection when the user navigates to a different path.
   useEffect(() => {
     setSelected(new Set());
-    setLastResult(null);
   }, [treemapRoot]);
 
   useEffect(() => {
@@ -74,21 +72,11 @@ export function Treemap({ width = 1000, height = 520 }: Props) {
 
   const performDelete = async () => {
     if (!confirm) return;
-    setPending(true);
     const paths = Array.from(selected);
-    const result = await deleteItems(paths, confirm);
-    setPending(false);
+    await startDelete(paths, confirm);
     setConfirm(null);
     setSelected(new Set());
-    setLastResult(
-      result.errors.length === 0
-        ? `Freed ${formatBytes(result.freed)} (${result.deleted.length} item${
-            result.deleted.length === 1 ? "" : "s"
-          })`
-        : `${result.deleted.length} ok, ${result.errors.length} failed: ${result.errors[0]?.message ?? ""}`,
-    );
-    // Re-fetch so the just-deleted tiles disappear from the view.
-    if (treemapRoot) loadTreemap(treemapRoot);
+    // The treemap re-fetches via the delete:finished event handler in scan.ts.
   };
 
   const totalSize = treemapData.reduce((acc, n) => acc + n.size, 0);
@@ -178,8 +166,8 @@ export function Treemap({ width = 1000, height = 520 }: Props) {
               Clear
             </button>
             <DeleteMenu
-              disabled={pending}
-              trigger={<>Delete{pending ? "ing…" : "…"}</>}
+              disabled={isDeleting}
+              trigger={<>Delete…</>}
               onPick={(mode) => setConfirm(mode)}
             />
           </div>
@@ -206,20 +194,15 @@ export function Treemap({ width = 1000, height = 520 }: Props) {
                 <button
                   type="button"
                   onClick={performDelete}
-                  disabled={pending}
+                  disabled={isDeleting}
                   className={`px-3 py-1 text-xs rounded hover:opacity-90 disabled:opacity-50 ${buttonClass}`}
                 >
-                  {pending ? "Working…" : buttonLabel}
+                  {isDeleting ? "Working…" : buttonLabel}
                 </button>
               </div>
             </div>
           );
         })()}
-      {lastResult && (
-        <div className="px-4 py-2 text-xs text-success bg-success/10 border-b border-success/20">
-          {lastResult}
-        </div>
-      )}
       <div className="relative">
         <svg width={width} height={height} className="block">
           {leaves.map((leaf) => {

@@ -4,6 +4,7 @@
 //! guards the active-scan slot to prevent overlapping scans (we serialize
 //! them; the user can cancel one before starting the next).
 
+use crate::delete::DeleteHandle;
 use crate::error::{AppError, AppResult};
 use crate::index::Index;
 use crate::scanner::ScanHandle;
@@ -15,7 +16,7 @@ use tauri::Manager;
 pub struct AppState {
     pub index: Arc<Index>,
     pub active_scan: Mutex<Option<Arc<ScanHandle>>>,
-    #[allow(dead_code)]
+    pub active_delete: Mutex<Option<Arc<DeleteHandle>>>,
     pub data_dir: PathBuf,
 }
 
@@ -32,8 +33,17 @@ impl AppState {
         Ok(Self {
             index: Arc::new(index),
             active_scan: Mutex::new(None),
+            active_delete: Mutex::new(None),
             data_dir,
         })
+    }
+
+    pub fn set_active_delete(&self, handle: Arc<DeleteHandle>) {
+        *self.active_delete.lock() = Some(handle);
+    }
+
+    pub fn active_delete(&self) -> Option<Arc<DeleteHandle>> {
+        self.active_delete.lock().clone()
     }
 
     pub fn set_active_scan(&self, handle: Arc<ScanHandle>) -> AppResult<()> {

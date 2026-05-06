@@ -549,6 +549,161 @@ pub fn empty_quarantine(state: &AppState, older_than_days: Option<i64>) -> AppRe
     Ok(result)
 }
 
+// ── admin-elevated retry (osascript) ───────────────────────────────────────
+
+/// Re-attempt a hard delete on paths that previously failed, this time as
+/// root via macOS's `osascript ... with administrator privileges`. Triggers
+/// the standard system password / Touch ID prompt. Used after a regular
+/// delete reports permission errors (typically code-signed `.app` bundles
+/// inside an orphan home dir).
+///
+/// We deliberately only run `rm -rf` here, not trash/quarantine — once
+/// you're sudo-rm-ing, going through Trash adds no safety and the
+/// authorization round-trip per item would be impractical.
+pub fn retry_delete_admin(state: &AppState, paths: Vec<String>) -> AppResult<DeleteResult> {
+    use std::io::Write;
+
+    let mut result = DeleteResult {
+        freed: 0,
+        deleted: Vec::new(),
+        errors: Vec::new(),
+    };
+
+    if paths.is_empty() {
+        return Ok(result);
+    }
+
+    // Hard-validate every path before we hand a list to root. This is the
+    // last line of defense before rm -rf as root touches the filesystem.
+    for p in &paths {
+        if !p.starts_with("/Users/") {
+            result.errors.push(DeleteError {
+                path: p.clone(),
+                message: "refusing to admin-delete outside /Users".into(),
+            });
+            return Ok(result);
+        }
+        if p == "/Users" || p == "/Users/" {
+            result.errors.push(DeleteError {
+                path: p.clone(),
+                message: "refusing to admin-delete /Users root".into(),
+            });
+            return Ok(result);
+        }
+        if p.contains('\0') || p.contains('\n') {
+            result.errors.push(DeleteError {
+                path: p.clone(),
+                message: "path contains illegal control character".into(),
+            });
+            return Ok(result);
+        }
+    }
+
+    // Best-effort size before deletion (permission-denied items might not
+    // stat — we just won't credit those bytes to bytes_freed).
+    let mut planned_size: i64 = 0;
+    for p in &paths {
+        if let Ok(s) = path_size(Path::new(p)) {
+            planned_size += s;
+        }
+    }
+
+    // Tempfiles for the path list and the wrapper script. NUL-delimited list
+    // avoids shell-escaping complications for paths with spaces or backslashes.
+    let temp_dir = std::env::temp_dir();
+    let pid = std::process::id();
+    let nonce = now_unix();
+    let list_path = temp_dir.join(format!("mac-storage-clear-admin-{pid}-{nonce}.list"));
+    let script_path = temp_dir.join(format!("mac-storage-clear-admin-{pid}-{nonce}.sh"));
+
+    {
+        let mut f = std::fs::File::create(&list_path)?;
+        for p in &paths {
+            f.write_all(p.as_bytes())?;
+            f.write_all(b"\0")?;
+        }
+    }
+
+    let script = format!(
+        "#!/bin/bash\n\
+         while IFS= read -r -d '' path; do\n\
+             case \"$path\" in\n\
+                 /Users/*) ;; \n\
+                 *) echo \"refusing $path\" >&2; continue ;; \n\
+             esac\n\
+             rm -rf -- \"$path\" || echo \"failed: $path\" >&2\n\
+         done < '{}'\n",
+        list_path.display(),
+    );
+    {
+        let mut f = std::fs::File::create(&script_path)?;
+        f.write_all(script.as_bytes())?;
+    }
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o700))?;
+
+    let osa = format!(
+        "do shell script \"{}\" with administrator privileges with prompt \"Mac Storage Clear needs admin access to delete protected files (typically code-signed app bundles inside /Users).\"",
+        script_path.display(),
+    );
+
+    let out = std::process::Command::new("osascript")
+        .arg("-e")
+        .arg(&osa)
+        .output();
+
+    let _ = std::fs::remove_file(&list_path);
+    let _ = std::fs::remove_file(&script_path);
+
+    let out = match out {
+        Ok(o) => o,
+        Err(e) => {
+            result.errors.push(DeleteError {
+                path: String::new(),
+                message: format!("osascript: {e}"),
+            });
+            return Ok(result);
+        }
+    };
+
+    if !out.status.success() {
+        let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+        result.errors.push(DeleteError {
+            path: String::new(),
+            message: format!(
+                "admin-delete failed: {}",
+                if stderr.is_empty() {
+                    "user cancelled or osascript errored".to_string()
+                } else {
+                    stderr
+                }
+            ),
+        });
+        return Ok(result);
+    }
+
+    // Check which paths are actually gone now.
+    for p in paths {
+        if Path::new(&p).exists() {
+            result.errors.push(DeleteError {
+                path: p,
+                message: "still present after admin-delete (likely a virtual file-provider mount)"
+                    .into(),
+            });
+        } else {
+            result.deleted.push(p);
+        }
+    }
+    result.freed = planned_size;
+
+    if !result.deleted.is_empty() {
+        let conn = state.index.conn();
+        prune_batch(&conn, &result.deleted)?;
+    }
+
+    Ok(result)
+}
+
 // ── helpers ─────────────────────────────────────────────────────────────────
 
 fn now_unix() -> u64 {

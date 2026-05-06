@@ -51,6 +51,7 @@ pub fn run() {
             commands::start_delete,
             commands::cancel_delete,
             commands::get_delete_status,
+            commands::retry_delete_admin,
             commands::list_quarantine,
             commands::restore_from_quarantine,
             commands::empty_quarantine,

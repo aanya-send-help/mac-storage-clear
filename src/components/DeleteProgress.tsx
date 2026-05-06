@@ -1,9 +1,13 @@
+import { useState } from "react";
 import { useScanStore } from "../lib/scan";
 import { formatBytes } from "../lib/format";
 
 export function DeleteProgress() {
   const status = useScanStore((s) => s.deleteStatus);
   const cancel = useScanStore((s) => s.cancelDelete);
+  const retryAdmin = useScanStore((s) => s.retryDeleteAdmin);
+  const [confirmAdmin, setConfirmAdmin] = useState(false);
+  const [adminRunning, setAdminRunning] = useState(false);
 
   if (!status) return null;
   if (status.status !== "running" && status.status !== "cancelled") {
@@ -85,6 +89,61 @@ export function DeleteProgress() {
             className="h-full bg-accent transition-all"
             style={{ width: `${filesPct}%` }}
           />
+        </div>
+      )}
+
+      {status.status !== "running" && status.errors.length > 0 && !confirmAdmin && (
+        <div className="pt-2 border-t border-border/50 flex items-center justify-between gap-3">
+          <div className="text-xs text-muted">
+            {status.errors.length} item{status.errors.length === 1 ? "" : "s"} couldn't be
+            removed (likely permission-denied or code-signed bundles).
+          </div>
+          <button
+            type="button"
+            onClick={() => setConfirmAdmin(true)}
+            disabled={adminRunning}
+            className="px-3 py-1 text-xs border border-border rounded hover:bg-surface disabled:opacity-50"
+          >
+            Retry failed items as admin…
+          </button>
+        </div>
+      )}
+
+      {confirmAdmin && (
+        <div className="pt-2 border-t border-border/50 space-y-2">
+          <div className="text-xs">
+            <strong>This runs as root.</strong> macOS will prompt for your password (or Touch
+            ID). Removing system files or active app bundles can destabilize your Mac. Only
+            confirm if these are inside a deleted-user home, an old project, or another path
+            you understand. Failed paths to retry:{" "}
+            <span className="font-mono">
+              {status.errors.length} · {status.errors[0]?.path ?? ""}
+              {status.errors.length > 1 ? " (and others)" : ""}
+            </span>
+          </div>
+          <div className="flex items-center justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => setConfirmAdmin(false)}
+              className="px-3 py-1 text-xs border border-border rounded hover:bg-bg"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={async () => {
+                setAdminRunning(true);
+                const paths = status.errors.map((e) => e.path).filter(Boolean);
+                await retryAdmin(paths);
+                setAdminRunning(false);
+                setConfirmAdmin(false);
+              }}
+              disabled={adminRunning}
+              className="px-3 py-1 text-xs bg-danger text-white rounded hover:opacity-90 disabled:opacity-50"
+            >
+              {adminRunning ? "Authorizing…" : "Retry as admin"}
+            </button>
+          </div>
         </div>
       )}
     </div>

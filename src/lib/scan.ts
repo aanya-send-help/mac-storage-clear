@@ -129,6 +129,7 @@ interface ScanState {
   loadCategoryItems: (id: string, limit?: number) => Promise<void>;
   startDelete: (paths: string[], mode: DeleteMode) => Promise<{ delete_id: number } | null>;
   cancelDelete: () => Promise<void>;
+  retryDeleteAdmin: (paths: string[]) => Promise<DeleteResult>;
   loadQuarantine: () => Promise<void>;
   restoreFromQuarantine: (ids: number[]) => Promise<DeleteResult>;
   emptyQuarantine: (olderThanDays?: number) => Promise<DeleteResult>;
@@ -305,6 +306,42 @@ export const useScanStore = create<ScanState>((set, get) => ({
       get().log("info", "Cancel requested");
     } catch (e) {
       set({ error: String(e) });
+    }
+  },
+
+  async retryDeleteAdmin(paths) {
+    try {
+      get().log("warn", `Retrying ${paths.length} item${paths.length === 1 ? "" : "s"} with admin`);
+      const result = await invoke<DeleteResult>("retry_delete_admin", { paths });
+      const summary =
+        result.errors.length === 0
+          ? `Admin retry: freed ${result.freed} bytes (${result.deleted.length} items)`
+          : `Admin retry: ${result.deleted.length} ok, ${result.errors.length} still failed`;
+      get().log(result.errors.length === 0 ? "info" : "warn", summary);
+      // Update deleteStatus so the banner reflects the new state.
+      set((s) => {
+        if (!s.deleteStatus) return {};
+        const remainingErrors = s.deleteStatus.errors.filter(
+          (e) => !result.deleted.includes(e.path),
+        );
+        return {
+          deleteStatus: {
+            ...s.deleteStatus,
+            bytes_freed: s.deleteStatus.bytes_freed + result.freed,
+            files_seen: s.deleteStatus.files_seen + result.deleted.length,
+            errors: remainingErrors,
+          },
+        };
+      });
+      // Refresh the views.
+      const root = get().treemapRoot ?? get().defaultRoots[0];
+      if (root) get().loadTreemap(root);
+      get().loadCategories();
+      return result;
+    } catch (e) {
+      set({ error: String(e) });
+      get().log("error", `Admin retry failed: ${e}`);
+      return { freed: 0, deleted: [], errors: [{ path: "", message: String(e) }] };
     }
   },
 

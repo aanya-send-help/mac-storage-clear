@@ -284,6 +284,23 @@ pub fn cancel_delete(state: State<'_, AppState>) -> Result<(), AppError> {
 }
 
 #[tauri::command]
+pub fn retry_delete_admin(
+    paths: Vec<String>,
+    state: State<'_, AppState>,
+) -> Result<DeleteResult, AppError> {
+    let count = paths.len();
+    let result = delete::retry_delete_admin(&state, paths)?;
+    tracing::info!(
+        requested = count,
+        deleted = result.deleted.len(),
+        errors = result.errors.len(),
+        freed = result.freed,
+        "retry_delete_admin"
+    );
+    Ok(result)
+}
+
+#[tauri::command]
 pub fn get_delete_status(state: State<'_, AppState>) -> Result<Option<DeleteStatus>, AppError> {
     Ok(state.active_delete().map(|h| h.snapshot()))
 }

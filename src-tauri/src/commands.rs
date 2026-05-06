@@ -1,4 +1,6 @@
 use crate::app_state::AppState;
+use crate::categories::{self, CategoryItem, CategorySummary};
+use crate::delete::{self, DeleteMode, DeleteResult, QuarantineEntry};
 use crate::error::AppError;
 use crate::scanner::{self, LargestFile, ScanConfig, ScanStatus, TreemapNode};
 use serde::Serialize;
@@ -186,4 +188,93 @@ pub fn list_largest(
         "list_largest"
     );
     Ok(result)
+}
+
+// ── categories ─────────────────────────────────────────────────────────────
+
+#[tauri::command]
+pub fn list_categories(state: State<'_, AppState>) -> Result<Vec<CategorySummary>, AppError> {
+    let start = std::time::Instant::now();
+    let conn = state.index.conn();
+    let conn = conn.lock();
+    let scan_id = match crate::scanner::queries_latest_scan(&conn)? {
+        Some(id) => id,
+        None => return Ok(Vec::new()),
+    };
+    let result = categories::all_summaries(&conn, scan_id);
+    tracing::info!(
+        rows = result.len(),
+        total_ms = start.elapsed().as_millis() as u64,
+        "list_categories"
+    );
+    Ok(result)
+}
+
+#[tauri::command]
+pub fn get_category_items(
+    category_id: String,
+    limit: Option<usize>,
+    state: State<'_, AppState>,
+) -> Result<Vec<CategoryItem>, AppError> {
+    let start = std::time::Instant::now();
+    let conn = state.index.conn();
+    let conn = conn.lock();
+    let scan_id = match crate::scanner::queries_latest_scan(&conn)? {
+        Some(id) => id,
+        None => return Ok(Vec::new()),
+    };
+    let category = categories::find(&category_id)
+        .ok_or_else(|| AppError::Scan(format!("unknown category: {category_id}")))?;
+    let result = category.items(&conn, scan_id, limit.unwrap_or(500))?;
+    tracing::info!(
+        category = category_id,
+        rows = result.len(),
+        total_ms = start.elapsed().as_millis() as u64,
+        "get_category_items"
+    );
+    Ok(result)
+}
+
+// ── delete pipeline ────────────────────────────────────────────────────────
+
+#[tauri::command]
+pub fn delete_items(
+    paths: Vec<String>,
+    mode: DeleteMode,
+    state: State<'_, AppState>,
+) -> Result<DeleteResult, AppError> {
+    let count = paths.len();
+    let start = std::time::Instant::now();
+    let result = delete::delete_paths(&state, paths, mode)?;
+    tracing::info!(
+        requested = count,
+        deleted = result.deleted.len(),
+        errors = result.errors.len(),
+        freed = result.freed,
+        mode = ?mode,
+        total_ms = start.elapsed().as_millis() as u64,
+        "delete_items"
+    );
+    Ok(result)
+}
+
+#[tauri::command]
+pub fn list_quarantine(state: State<'_, AppState>) -> Result<Vec<QuarantineEntry>, AppError> {
+    delete::list_quarantine(&state)
+}
+
+#[tauri::command]
+pub fn restore_from_quarantine(
+    ids: Vec<i64>,
+    state: State<'_, AppState>,
+) -> Result<DeleteResult, AppError> {
+    delete::restore_from_quarantine(&state, ids)
+}
+
+#[tauri::command]
+pub fn empty_quarantine(
+    older_than_days: Option<i64>,
+    state: State<'_, AppState>,
+) -> Result<DeleteResult, AppError> {
+    delete::empty_quarantine(&state, older_than_days)
 }

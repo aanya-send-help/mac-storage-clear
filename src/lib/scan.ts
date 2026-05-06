@@ -45,6 +45,42 @@ export interface LargestFile {
   mtime: number | null;
 }
 
+export type Risk = "safe" | "needs-redownload" | "user-decides";
+
+export interface CategorySummary {
+  id: string;
+  name: string;
+  description: string;
+  risk: Risk;
+  total_size: number;
+  item_count: number;
+}
+
+export interface CategoryItem {
+  path: string;
+  size: number;
+  mtime: number | null;
+  is_dir: boolean;
+  group: string | null;
+}
+
+export type DeleteMode = "quarantine" | "hard";
+
+export interface DeleteResult {
+  freed: number;
+  deleted: string[];
+  errors: { path: string; message: string }[];
+}
+
+export interface QuarantineEntry {
+  id: number;
+  original_path: string;
+  quarantine_path: string;
+  deleted_at: number;
+  expires_at: number;
+  size: number;
+}
+
 interface ScanState {
   status: ScanStatus | null;
   defaultRoots: string[];
@@ -53,6 +89,12 @@ interface ScanState {
   largest: LargestFile[];
   loadingTreemap: boolean;
   loadingLargest: boolean;
+  categories: CategorySummary[];
+  loadingCategories: boolean;
+  categoryItems: Record<string, CategoryItem[]>;
+  loadingCategoryItems: Record<string, boolean>;
+  quarantine: QuarantineEntry[];
+  loadingQuarantine: boolean;
   error: string | null;
 
   loadDefaultRoots: () => Promise<void>;
@@ -61,6 +103,12 @@ interface ScanState {
   cancelScan: () => Promise<void>;
   loadTreemap: (parent: string) => Promise<void>;
   loadLargest: (limit?: number) => Promise<void>;
+  loadCategories: () => Promise<void>;
+  loadCategoryItems: (id: string, limit?: number) => Promise<void>;
+  deleteItems: (paths: string[], mode: DeleteMode) => Promise<DeleteResult>;
+  loadQuarantine: () => Promise<void>;
+  restoreFromQuarantine: (ids: number[]) => Promise<DeleteResult>;
+  emptyQuarantine: (olderThanDays?: number) => Promise<DeleteResult>;
   refreshAll: () => Promise<void>;
   initEvents: () => Promise<UnlistenFn>;
 }
@@ -73,6 +121,12 @@ export const useScanStore = create<ScanState>((set, get) => ({
   largest: [],
   loadingTreemap: false,
   loadingLargest: false,
+  categories: [],
+  loadingCategories: false,
+  categoryItems: {},
+  loadingCategoryItems: {},
+  quarantine: [],
+  loadingQuarantine: false,
   error: null,
 
   async loadDefaultRoots() {
@@ -154,12 +208,94 @@ export const useScanStore = create<ScanState>((set, get) => ({
     }
   },
 
+  async loadCategories() {
+    set({ loadingCategories: true });
+    try {
+      const cats = await invoke<CategorySummary[]>("list_categories");
+      set({ categories: cats, loadingCategories: false });
+    } catch (e) {
+      set({ error: String(e), loadingCategories: false });
+    }
+  },
+
+  async loadCategoryItems(id, limit = 500) {
+    set((s) => ({
+      loadingCategoryItems: { ...s.loadingCategoryItems, [id]: true },
+    }));
+    try {
+      const items = await invoke<CategoryItem[]>("get_category_items", {
+        categoryId: id,
+        limit,
+      });
+      set((s) => ({
+        categoryItems: { ...s.categoryItems, [id]: items },
+        loadingCategoryItems: { ...s.loadingCategoryItems, [id]: false },
+      }));
+    } catch (e) {
+      set((s) => ({
+        error: String(e),
+        loadingCategoryItems: { ...s.loadingCategoryItems, [id]: false },
+      }));
+    }
+  },
+
+  async deleteItems(paths, mode) {
+    try {
+      const result = await invoke<DeleteResult>("delete_items", { paths, mode });
+      // Refresh category summaries — counts will have changed.
+      get().loadCategories();
+      // If we just quarantined something, refresh that too.
+      if (mode === "quarantine") get().loadQuarantine();
+      return result;
+    } catch (e) {
+      set({ error: String(e) });
+      return { freed: 0, deleted: [], errors: [{ path: "", message: String(e) }] };
+    }
+  },
+
+  async loadQuarantine() {
+    set({ loadingQuarantine: true });
+    try {
+      const entries = await invoke<QuarantineEntry[]>("list_quarantine");
+      set({ quarantine: entries, loadingQuarantine: false });
+    } catch (e) {
+      set({ error: String(e), loadingQuarantine: false });
+    }
+  },
+
+  async restoreFromQuarantine(ids) {
+    try {
+      const result = await invoke<DeleteResult>("restore_from_quarantine", { ids });
+      get().loadQuarantine();
+      get().loadCategories();
+      return result;
+    } catch (e) {
+      set({ error: String(e) });
+      return { freed: 0, deleted: [], errors: [{ path: "", message: String(e) }] };
+    }
+  },
+
+  async emptyQuarantine(olderThanDays) {
+    try {
+      const result = await invoke<DeleteResult>("empty_quarantine", {
+        olderThanDays: olderThanDays ?? null,
+      });
+      get().loadQuarantine();
+      return result;
+    } catch (e) {
+      set({ error: String(e) });
+      return { freed: 0, deleted: [], errors: [{ path: "", message: String(e) }] };
+    }
+  },
+
   async refreshAll() {
-    const { treemapRoot, defaultRoots, loadTreemap, loadLargest, refreshStatus } = get();
+    const { treemapRoot, defaultRoots, loadTreemap, loadLargest, loadCategories, refreshStatus } =
+      get();
     const target = treemapRoot ?? defaultRoots[0];
     await Promise.all([
       target ? loadTreemap(target) : Promise.resolve(),
       loadLargest(),
+      loadCategories(),
       refreshStatus(),
     ]);
   },
@@ -170,10 +306,11 @@ export const useScanStore = create<ScanState>((set, get) => ({
     });
     const unsubFinished = await listen<ScanStatus>("scan:finished", (e) => {
       set({ status: e.payload });
-      // Auto-refresh treemap and largest once a scan completes.
+      // Auto-refresh treemap, largest, and categories once a scan completes.
       const root = get().treemapRoot ?? get().defaultRoots[0];
       if (root) get().loadTreemap(root);
       get().loadLargest();
+      get().loadCategories();
     });
     return () => {
       unsubProgress();

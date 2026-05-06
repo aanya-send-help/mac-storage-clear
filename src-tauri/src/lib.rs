@@ -7,7 +7,9 @@
 //! These flags are mutually exclusive in practice; CI builds each separately.
 
 mod app_state;
+mod categories;
 mod commands;
+mod delete;
 mod error;
 mod index;
 mod privileged;
@@ -44,6 +46,12 @@ pub fn run() {
             commands::get_scan_status,
             commands::get_treemap,
             commands::list_largest,
+            commands::list_categories,
+            commands::get_category_items,
+            commands::delete_items,
+            commands::list_quarantine,
+            commands::restore_from_quarantine,
+            commands::empty_quarantine,
         ])
         .run(tauri::generate_context!())
         .expect("error while running mac-storage-clear");

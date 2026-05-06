@@ -1,0 +1,196 @@
+import { useEffect, useMemo, useState } from "react";
+import { useScanStore, type DeleteMode } from "../lib/scan";
+import { formatBytes, formatRelativeTime } from "../lib/format";
+
+export function CategoryDetail({ categoryId }: { categoryId: string }) {
+  const items = useScanStore((s) => s.categoryItems[categoryId] ?? []);
+  const loading = useScanStore((s) => s.loadingCategoryItems[categoryId] ?? false);
+  const loadItems = useScanStore((s) => s.loadCategoryItems);
+  const deleteItems = useScanStore((s) => s.deleteItems);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [pending, setPending] = useState<DeleteMode | null>(null);
+  const [confirm, setConfirm] = useState<DeleteMode | null>(null);
+  const [lastResult, setLastResult] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (items.length === 0 && !loading) loadItems(categoryId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [categoryId]);
+
+  const allSelected = items.length > 0 && selected.size === items.length;
+  const selectedSize = useMemo(
+    () => items.filter((i) => selected.has(i.path)).reduce((acc, i) => acc + i.size, 0),
+    [items, selected],
+  );
+
+  const toggle = (path: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
+    });
+  };
+
+  const toggleAll = () => {
+    if (allSelected) setSelected(new Set());
+    else setSelected(new Set(items.map((i) => i.path)));
+  };
+
+  const requestDelete = (mode: DeleteMode) => {
+    if (selected.size === 0) return;
+    setConfirm(mode);
+  };
+
+  const performDelete = async () => {
+    if (!confirm) return;
+    setPending(confirm);
+    const paths = Array.from(selected);
+    const result = await deleteItems(paths, confirm);
+    setPending(null);
+    setConfirm(null);
+    setSelected(new Set());
+    if (result.errors.length === 0) {
+      setLastResult(
+        `Freed ${formatBytes(result.freed)} (${result.deleted.length} item${
+          result.deleted.length === 1 ? "" : "s"
+        })`,
+      );
+    } else {
+      setLastResult(
+        `${result.deleted.length} ok, ${result.errors.length} failed. ${result.errors[0]?.message ?? ""}`,
+      );
+    }
+  };
+
+  if (loading && items.length === 0) {
+    return <div className="px-4 py-6 text-sm text-muted">Loading items…</div>;
+  }
+
+  if (items.length === 0) {
+    return <div className="px-4 py-6 text-sm text-muted">No items.</div>;
+  }
+
+  return (
+    <div className="divide-y divide-border">
+      <div className="px-4 py-2 flex items-center justify-between gap-3 text-xs">
+        <label className="flex items-center gap-2 cursor-pointer select-none">
+          <input
+            type="checkbox"
+            checked={allSelected}
+            onChange={toggleAll}
+            className="accent-accent"
+          />
+          <span className="text-muted">
+            {selected.size === 0
+              ? `Select to delete · ${items.length} items`
+              : `${selected.size} selected · ${formatBytes(selectedSize)}`}
+          </span>
+        </label>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => requestDelete("quarantine")}
+            disabled={selected.size === 0 || pending !== null}
+            className="px-3 py-1.5 text-xs font-medium border border-border rounded-md hover:bg-surface disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            Move to quarantine
+          </button>
+          <button
+            type="button"
+            onClick={() => requestDelete("hard")}
+            disabled={selected.size === 0 || pending !== null}
+            className="px-3 py-1.5 text-xs font-medium bg-danger text-white rounded-md hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            Delete now
+          </button>
+        </div>
+      </div>
+
+      {lastResult && (
+        <div className="px-4 py-2 text-xs text-muted bg-success/10 border-y border-success/20">
+          {lastResult}
+        </div>
+      )}
+
+      {confirm && (
+        <div className="px-4 py-3 bg-danger/5 border-y border-danger/20 flex items-center justify-between gap-3">
+          <div className="text-xs">
+            {confirm === "quarantine" ? (
+              <>
+                Move <strong>{selected.size}</strong> item
+                {selected.size === 1 ? "" : "s"} ({formatBytes(selectedSize)}) to quarantine?
+                Recoverable for 7 days.
+              </>
+            ) : (
+              <>
+                Permanently delete <strong>{selected.size}</strong> item
+                {selected.size === 1 ? "" : "s"} ({formatBytes(selectedSize)})? This can't be
+                undone.
+              </>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setConfirm(null)}
+              className="px-3 py-1 text-xs border border-border rounded hover:bg-surface"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={performDelete}
+              disabled={pending !== null}
+              className="px-3 py-1 text-xs bg-danger text-white rounded hover:opacity-90 disabled:opacity-50"
+            >
+              {pending ? "Working…" : "Confirm"}
+            </button>
+          </div>
+        </div>
+      )}
+
+      <div className="max-h-[480px] overflow-y-auto">
+        <table className="w-full text-sm">
+          <tbody>
+            {items.map((item) => {
+              const checked = selected.has(item.path);
+              return (
+                <tr
+                  key={item.path}
+                  onClick={() => toggle(item.path)}
+                  className="border-t border-border cursor-pointer hover:bg-surface/50"
+                >
+                  <td className="px-4 py-2 w-8">
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() => toggle(item.path)}
+                      onClick={(e) => e.stopPropagation()}
+                      className="accent-accent"
+                    />
+                  </td>
+                  <td className="px-2 py-2 truncate max-w-2xl font-mono text-xs" title={item.path}>
+                    {pathTail(item.path)}
+                  </td>
+                  <td className="px-4 py-2 text-right font-mono text-xs w-24">
+                    {formatBytes(item.size)}
+                  </td>
+                  <td className="px-4 py-2 text-right text-muted text-xs w-28">
+                    {item.mtime ? formatRelativeTime(item.mtime * 1000) : "—"}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function pathTail(p: string): string {
+  const segs = p.split("/");
+  if (segs.length <= 4) return p;
+  return ".../" + segs.slice(-3).join("/");
+}

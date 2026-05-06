@@ -7,6 +7,8 @@ import { ThemePicker } from "./components/ThemePicker";
 import { ScanProgress } from "./components/ScanProgress";
 import { Treemap } from "./components/Treemap";
 import { LargestFiles } from "./components/LargestFiles";
+import { Categories } from "./components/Categories";
+import { Quarantine } from "./components/Quarantine";
 
 interface BuildInfo {
   version: string;
@@ -15,11 +17,11 @@ interface BuildInfo {
   sandboxed: boolean;
 }
 
-type TabId = "treemap" | "largest";
+type TabId = "categories" | "treemap" | "largest" | "quarantine";
 
 function Shell() {
   const [build, setBuild] = useState<BuildInfo | null>(null);
-  const [tab, setTab] = useState<TabId>("treemap");
+  const [tab, setTab] = useState<TabId>("categories");
   const error = useScanStore((s) => s.error);
   const loadDefaultRoots = useScanStore((s) => s.loadDefaultRoots);
   const refreshStatus = useScanStore((s) => s.refreshStatus);
@@ -63,16 +65,24 @@ function Shell() {
           )}
 
           <div className="flex gap-1 border-b border-border">
+            <TabButton active={tab === "categories"} onClick={() => setTab("categories")}>
+              Categories
+            </TabButton>
             <TabButton active={tab === "treemap"} onClick={() => setTab("treemap")}>
               Treemap
             </TabButton>
             <TabButton active={tab === "largest"} onClick={() => setTab("largest")}>
               Largest files
             </TabButton>
+            <TabButton active={tab === "quarantine"} onClick={() => setTab("quarantine")}>
+              Quarantine
+            </TabButton>
           </div>
 
+          {tab === "categories" && <Categories />}
           {tab === "treemap" && <Treemap />}
           {tab === "largest" && <LargestFiles />}
+          {tab === "quarantine" && <Quarantine />}
         </div>
       </main>
     </div>

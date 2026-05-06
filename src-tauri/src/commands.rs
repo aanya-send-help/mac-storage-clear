@@ -148,21 +148,17 @@ pub fn get_treemap(
     state: State<'_, AppState>,
 ) -> Result<Vec<TreemapNode>, AppError> {
     let start = std::time::Instant::now();
-    let conn = state.index.conn();
-    let conn = conn.lock();
-    let lock_acquired = start.elapsed();
+    let conn = state.index.read_conn()?;
     let scan_id = match crate::scanner::queries_latest_scan(&conn)? {
         Some(id) => id,
         None => return Ok(Vec::new()),
     };
     let result =
         crate::scanner::queries_treemap_children(&conn, scan_id, &parent, limit.unwrap_or(100))?;
-    let total = start.elapsed();
     tracing::info!(
         parent = %parent,
         rows = result.len(),
-        lock_ms = lock_acquired.as_millis() as u64,
-        total_ms = total.as_millis() as u64,
+        total_ms = start.elapsed().as_millis() as u64,
         "get_treemap"
     );
     Ok(result)
@@ -174,19 +170,15 @@ pub fn list_largest(
     state: State<'_, AppState>,
 ) -> Result<Vec<LargestFile>, AppError> {
     let start = std::time::Instant::now();
-    let conn = state.index.conn();
-    let conn = conn.lock();
-    let lock_acquired = start.elapsed();
+    let conn = state.index.read_conn()?;
     let scan_id = match crate::scanner::queries_latest_scan(&conn)? {
         Some(id) => id,
         None => return Ok(Vec::new()),
     };
     let result = crate::scanner::queries_largest(&conn, scan_id, limit.unwrap_or(100))?;
-    let total = start.elapsed();
     tracing::info!(
         rows = result.len(),
-        lock_ms = lock_acquired.as_millis() as u64,
-        total_ms = total.as_millis() as u64,
+        total_ms = start.elapsed().as_millis() as u64,
         "list_largest"
     );
     Ok(result)
@@ -197,8 +189,7 @@ pub fn list_largest(
 #[tauri::command]
 pub fn list_categories(state: State<'_, AppState>) -> Result<Vec<CategorySummary>, AppError> {
     let start = std::time::Instant::now();
-    let conn = state.index.conn();
-    let conn = conn.lock();
+    let conn = state.index.read_conn()?;
     let scan_id = match crate::scanner::queries_latest_scan(&conn)? {
         Some(id) => id,
         None => return Ok(Vec::new()),
@@ -219,8 +210,7 @@ pub fn get_category_items(
     state: State<'_, AppState>,
 ) -> Result<Vec<CategoryItem>, AppError> {
     let start = std::time::Instant::now();
-    let conn = state.index.conn();
-    let conn = conn.lock();
+    let conn = state.index.read_conn()?;
     let scan_id = match crate::scanner::queries_latest_scan(&conn)? {
         Some(id) => id,
         None => return Ok(Vec::new()),
@@ -287,17 +277,35 @@ pub fn cancel_delete(state: State<'_, AppState>) -> Result<(), AppError> {
 pub fn retry_delete_admin(
     paths: Vec<String>,
     state: State<'_, AppState>,
-) -> Result<DeleteResult, AppError> {
-    let count = paths.len();
-    let result = delete::retry_delete_admin(&state, paths)?;
-    tracing::info!(
-        requested = count,
-        deleted = result.deleted.len(),
-        errors = result.errors.len(),
-        freed = result.freed,
-        "retry_delete_admin"
-    );
-    Ok(result)
+    app: AppHandle,
+) -> Result<StartDeleteResult, AppError> {
+    if let Some(active) = state.active_delete() {
+        let s = active.snapshot();
+        if s.status == "running" {
+            return Err(AppError::Scan(
+                "another delete is already in progress".into(),
+            ));
+        }
+    }
+
+    let count = paths.len() as i64;
+    let app_for_cb = app.clone();
+    let progress_cb = Arc::new(move |status: DeleteStatus| {
+        let _ = app_for_cb.emit("delete:progress", &status);
+        if status.finished_at.is_some() {
+            let _ = app_for_cb.emit("delete:finished", &status);
+        }
+    }) as Arc<dyn Fn(DeleteStatus) + Send + Sync>;
+
+    let handle = delete::start_admin_retry(&state, paths, progress_cb)?;
+    let delete_id = handle.delete_id;
+    state.set_active_delete(handle);
+
+    tracing::info!(delete_id, count, "retry_delete_admin");
+    Ok(StartDeleteResult {
+        delete_id,
+        total_files: count,
+    })
 }
 
 #[tauri::command]

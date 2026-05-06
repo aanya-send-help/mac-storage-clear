@@ -154,6 +154,25 @@ pub fn start_delete(
     let conn = state.index.conn();
     let handle_clone = Arc::clone(&handle);
 
+    // Heartbeat thread: emits a progress event every 250ms regardless of
+    // where the worker is. So even when the worker is deep inside an OS
+    // call (recursive delete, NSFileManager.trashItem on a multi-GB app
+    // bundle, etc.) the UI's elapsed counter keeps moving and the user
+    // knows the app isn't dead.
+    let hb_handle = Arc::clone(&handle_clone);
+    let hb_cb = progress_cb.clone();
+    thread::Builder::new()
+        .name("delete-heartbeat".into())
+        .spawn(move || loop {
+            thread::sleep(std::time::Duration::from_millis(250));
+            let snap = hb_handle.snapshot();
+            if snap.status != "running" {
+                break;
+            }
+            hb_cb(snap);
+        })
+        .expect("spawn delete-heartbeat");
+
     thread::Builder::new()
         .name("delete-worker".into())
         .spawn(move || {
@@ -223,8 +242,11 @@ fn run_delete(
             break;
         }
 
+        // Emit before starting work on this path so the UI shows what we're
+        // about to operate on. Especially important for slow ops like
+        // moving a multi-GB .app bundle to Trash.
         *current_path.lock() = Some(raw.clone());
-        files_seen.fetch_add(1, Ordering::AcqRel);
+        progress_cb(handle.snapshot());
 
         let path = PathBuf::from(&raw);
         if !path.starts_with("/Users/") {
@@ -232,41 +254,76 @@ fn run_delete(
                 path: raw,
                 message: "refusing to delete outside /Users".into(),
             });
+            files_seen.fetch_add(1, Ordering::AcqRel);
             continue;
         }
 
-        let size = match path_size(&path) {
-            Ok(s) => s,
-            Err(e) => {
-                errors.lock().push(DeleteError {
-                    path: raw,
-                    message: format!("stat: {e}"),
-                });
-                continue;
-            }
+        // If the path is already gone (a previous delete or external action
+        // beat us to it), treat that as success and just prune the row. This
+        // is what the user sees as "phantom rows": the FS is correct, the
+        // index isn't.
+        let exists_before = path.exists() || path.symlink_metadata().is_ok();
+        if !exists_before {
+            deleted_paths.push(raw.clone());
+            files_seen.fetch_add(1, Ordering::AcqRel);
+            continue;
+        }
+
+        // Pre-flight size for the bytes_freed counter. Strategy depends on mode:
+        // - Hard:        the recursive deleter accumulates bytes per file as
+        //                it goes; the outer counter must not also add `size`
+        //                or it'll double-count.
+        // - Trash/Quar:  the OS call is one shot and gives us nothing back, so
+        //                we use the indexed recursive_size from the scan DB.
+        //                Falls back to a stat-only quick_size for a single file.
+        let size = match mode {
+            DeleteMode::Hard => 0,
+            DeleteMode::Trash | DeleteMode::Quarantine => indexed_recursive_size(&conn, &raw)
+                .unwrap_or_else(|| quick_size(&path).unwrap_or(0)),
         };
 
         let outcome = match mode {
             DeleteMode::Trash => trash_one(&path),
             DeleteMode::Quarantine => quarantine_one(&path, &quarantine_dir, now),
-            DeleteMode::Hard => hard_delete_one(&path),
+            DeleteMode::Hard => hard_delete_recursive(&path, &cancel, &bytes_freed, &current_path)
+                .map(|_| PathBuf::new()),
         };
 
-        match outcome {
-            Ok(qpath) => {
+        // Regardless of whether the OS call returned Ok or Err, source of
+        // truth is whether the path is still on disk. This handles cases
+        // where trash/rename succeeded but reported a non-fatal error, or
+        // where the file vanished between our check and our action.
+        let exists_after = path.exists() || path.symlink_metadata().is_ok();
+
+        match (outcome, exists_after) {
+            (Ok(qpath), false) => {
                 if matches!(mode, DeleteMode::Quarantine) {
                     quarantine_records.push((raw.clone(), qpath, size));
                 }
                 bytes_freed.fetch_add(size, Ordering::AcqRel);
                 deleted_paths.push(raw);
             }
-            Err(e) => {
+            (Err(_), false) => {
+                // Op errored but the path is gone anyway — count it.
+                bytes_freed.fetch_add(size, Ordering::AcqRel);
+                deleted_paths.push(raw);
+            }
+            (Ok(_), true) => {
+                errors.lock().push(DeleteError {
+                    path: raw,
+                    message: "delete reported success but file remains (likely a virtual mount)"
+                        .into(),
+                });
+            }
+            (Err(e), true) => {
                 errors.lock().push(DeleteError {
                     path: raw,
                     message: e.to_string(),
                 });
             }
         }
+
+        files_seen.fetch_add(1, Ordering::AcqRel);
 
         if last_progress.elapsed() >= PROGRESS_INTERVAL {
             progress_cb(handle.snapshot());
@@ -312,6 +369,45 @@ fn hard_delete_one(path: &Path) -> std::io::Result<PathBuf> {
     Ok(PathBuf::new())
 }
 
+/// Recursive hard-delete with cancel + per-file progress tracking. The
+/// alternative `remove_dir_all` is synchronous, can't be cancelled, and
+/// gives the UI no feedback for the duration — for a deep tree like a
+/// pip cache or a node_modules that's tens of seconds of "0% 0 B".
+///
+/// We walk depth-first post-order: every file is unlinked first, then
+/// each directory is removed when its contents are gone.
+fn hard_delete_recursive(
+    path: &Path,
+    cancel: &AtomicBool,
+    bytes_freed: &AtomicI64,
+    current_path: &Mutex<Option<String>>,
+) -> std::io::Result<()> {
+    if cancel.load(Ordering::Acquire) {
+        return Err(std::io::Error::other("cancelled"));
+    }
+
+    use std::os::unix::fs::MetadataExt;
+    let meta = std::fs::symlink_metadata(path)?;
+
+    if !meta.is_dir() || meta.file_type().is_symlink() {
+        let size = (meta.blocks() as i64).saturating_mul(512);
+        *current_path.lock() = Some(path.display().to_string());
+        std::fs::remove_file(path)?;
+        bytes_freed.fetch_add(size, Ordering::AcqRel);
+        return Ok(());
+    }
+
+    let entries = std::fs::read_dir(path)?;
+    for entry in entries {
+        let entry = entry?;
+        hard_delete_recursive(&entry.path(), cancel, bytes_freed, current_path)?;
+    }
+
+    *current_path.lock() = Some(path.display().to_string());
+    std::fs::remove_dir(path)?;
+    Ok(())
+}
+
 fn trash_one(path: &Path) -> std::io::Result<PathBuf> {
     trash::delete(path).map_err(|e| std::io::Error::other(format!("trash: {e}")))?;
     Ok(PathBuf::new())
@@ -340,6 +436,38 @@ fn path_size(path: &Path) -> std::io::Result<i64> {
     } else {
         Ok((meta.blocks() as i64).saturating_mul(512))
     }
+}
+
+/// Stat-only size estimate. For files this is exact. For directories this is
+/// just the dir-entry size (~64 bytes); we do not walk recursively — that's
+/// `path_size`'s job and is too slow to do per-path during a delete loop.
+fn quick_size(path: &Path) -> std::io::Result<i64> {
+    use std::os::unix::fs::MetadataExt;
+    let meta = std::fs::symlink_metadata(path)?;
+    Ok((meta.blocks() as i64).saturating_mul(512))
+}
+
+/// Look up the indexed `recursive_size` for the most recent scan that
+/// contains this path. Returns None if there is no current scan, the path
+/// isn't indexed, or the DB is unreachable. We use a write-conn lookup
+/// because we already hold a writer-side conn handle in the delete worker
+/// — opening a read conn here would race with the writer's prune txn.
+fn indexed_recursive_size(conn: &Arc<Mutex<rusqlite::Connection>>, path: &str) -> Option<i64> {
+    let conn = conn.lock();
+    let scan_id: i64 = conn
+        .query_row(
+            "SELECT id FROM scan_runs WHERE status IN ('done', 'cancelled')
+             ORDER BY started_at DESC LIMIT 1",
+            [],
+            |r| r.get(0),
+        )
+        .ok()?;
+    conn.query_row(
+        "SELECT recursive_size FROM files WHERE scan_id = ?1 AND full_path = ?2",
+        rusqlite::params![scan_id, path],
+        |r| r.get::<_, i64>(0),
+    )
+    .ok()
 }
 
 // ── batched DB writes ──────────────────────────────────────────────────────
@@ -409,8 +537,7 @@ pub struct QuarantineEntry {
 }
 
 pub fn list_quarantine(state: &AppState) -> AppResult<Vec<QuarantineEntry>> {
-    let conn = state.index.conn();
-    let conn = conn.lock();
+    let conn = state.index.read_conn()?;
     let mut stmt = conn
         .prepare(
             "SELECT id, original_path, quarantine_path, deleted_at, expires_at, size
@@ -551,16 +678,104 @@ pub fn empty_quarantine(state: &AppState, older_than_days: Option<i64>) -> AppRe
 
 // ── admin-elevated retry (osascript) ───────────────────────────────────────
 
-/// Re-attempt a hard delete on paths that previously failed, this time as
-/// root via macOS's `osascript ... with administrator privileges`. Triggers
-/// the standard system password / Touch ID prompt. Used after a regular
-/// delete reports permission errors (typically code-signed `.app` bundles
-/// inside an orphan home dir).
-///
-/// We deliberately only run `rm -rf` here, not trash/quarantine — once
-/// you're sudo-rm-ing, going through Trash adds no safety and the
-/// authorization round-trip per item would be impractical.
-pub fn retry_delete_admin(state: &AppState, paths: Vec<String>) -> AppResult<DeleteResult> {
+/// Async wrapper around the admin retry. Spawns a worker thread, returns a
+/// DeleteHandle immediately so the Tauri IPC thread doesn't block while
+/// osascript shows the password prompt and rm-rf walks the trees. Status
+/// is reported through the same `delete:progress` / `delete:finished`
+/// event channels as a normal delete.
+pub fn start_admin_retry(
+    state: &AppState,
+    paths: Vec<String>,
+    progress_cb: Arc<dyn Fn(DeleteStatus) + Send + Sync>,
+) -> AppResult<Arc<DeleteHandle>> {
+    if paths.is_empty() {
+        return Err(AppError::Scan("no paths to retry".into()));
+    }
+
+    let started_at = now_unix();
+    let total_files = paths.len() as i64;
+    let next_id = next_delete_id();
+
+    let cancel = Arc::new(AtomicBool::new(false));
+    let files_seen = Arc::new(AtomicU64::new(0));
+    let bytes_freed = Arc::new(AtomicI64::new(0));
+    let current_path = Arc::new(Mutex::new(Some(
+        "Authenticating with macOS (password / Touch ID)…".to_string(),
+    )));
+    let finished_at = Arc::new(Mutex::new(None::<u64>));
+    let status = Arc::new(Mutex::new("running".to_string()));
+    let errors: Arc<Mutex<Vec<DeleteError>>> = Arc::new(Mutex::new(Vec::new()));
+
+    let handle = Arc::new(DeleteHandle {
+        delete_id: next_id,
+        mode: DeleteMode::Hard,
+        cancel: Arc::clone(&cancel),
+        files_seen: Arc::clone(&files_seen),
+        bytes_freed: Arc::clone(&bytes_freed),
+        current_path: Arc::clone(&current_path),
+        status: Arc::clone(&status),
+        errors: Arc::clone(&errors),
+        started_at,
+        finished_at: Arc::clone(&finished_at),
+        total_files,
+    });
+
+    // Heartbeat — keeps the elapsed counter ticking while osascript is
+    // showing the password prompt or rm -rf is busy.
+    let hb_handle = Arc::clone(&handle);
+    let hb_cb = progress_cb.clone();
+    thread::Builder::new()
+        .name("admin-retry-heartbeat".into())
+        .spawn(move || loop {
+            thread::sleep(std::time::Duration::from_millis(250));
+            let snap = hb_handle.snapshot();
+            if snap.status != "running" {
+                break;
+            }
+            hb_cb(snap);
+        })
+        .expect("spawn admin-retry-heartbeat");
+
+    let conn = state.index.conn();
+    let handle_clone = Arc::clone(&handle);
+
+    thread::Builder::new()
+        .name("admin-retry-worker".into())
+        .spawn(move || {
+            let result = retry_delete_admin_sync(&conn, &paths, &current_path);
+            *finished_at.lock() = Some(now_unix());
+            match result {
+                Ok(r) => {
+                    bytes_freed.store(r.freed, Ordering::Release);
+                    files_seen.store(r.deleted.len() as u64, Ordering::Release);
+                    *errors.lock() = r.errors;
+                    // 'done' regardless of partial errors — the UI shows
+                    // the error count and the user can decide what to do.
+                    *status.lock() = "done".into();
+                }
+                Err(e) => {
+                    tracing::error!(?e, "admin retry failed");
+                    errors.lock().push(DeleteError {
+                        path: String::new(),
+                        message: e.to_string(),
+                    });
+                    *status.lock() = "failed".into();
+                }
+            };
+            progress_cb(handle_clone.snapshot());
+        })
+        .expect("spawn admin-retry-worker");
+
+    Ok(handle)
+}
+
+/// Synchronous core of the admin retry — does the actual osascript call
+/// plus prune. Wrapped by `start_admin_retry` for async exposure.
+fn retry_delete_admin_sync(
+    conn: &Arc<Mutex<rusqlite::Connection>>,
+    paths: &[String],
+    current_path: &Mutex<Option<String>>,
+) -> AppResult<DeleteResult> {
     use std::io::Write;
 
     let mut result = DeleteResult {
@@ -575,7 +790,7 @@ pub fn retry_delete_admin(state: &AppState, paths: Vec<String>) -> AppResult<Del
 
     // Hard-validate every path before we hand a list to root. This is the
     // last line of defense before rm -rf as root touches the filesystem.
-    for p in &paths {
+    for p in paths {
         if !p.starts_with("/Users/") {
             result.errors.push(DeleteError {
                 path: p.clone(),
@@ -602,7 +817,7 @@ pub fn retry_delete_admin(state: &AppState, paths: Vec<String>) -> AppResult<Del
     // Best-effort size before deletion (permission-denied items might not
     // stat — we just won't credit those bytes to bytes_freed).
     let mut planned_size: i64 = 0;
-    for p in &paths {
+    for p in paths {
         if let Ok(s) = path_size(Path::new(p)) {
             planned_size += s;
         }
@@ -618,7 +833,7 @@ pub fn retry_delete_admin(state: &AppState, paths: Vec<String>) -> AppResult<Del
 
     {
         let mut f = std::fs::File::create(&list_path)?;
-        for p in &paths {
+        for p in paths {
             f.write_all(p.as_bytes())?;
             f.write_all(b"\0")?;
         }
@@ -642,6 +857,7 @@ pub fn retry_delete_admin(state: &AppState, paths: Vec<String>) -> AppResult<Del
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o700))?;
 
+    *current_path.lock() = Some("Authenticating with macOS…".to_string());
     let osa = format!(
         "do shell script \"{}\" with administrator privileges with prompt \"Mac Storage Clear needs admin access to delete protected files (typically code-signed app bundles inside /Users).\"",
         script_path.display(),
@@ -651,6 +867,8 @@ pub fn retry_delete_admin(state: &AppState, paths: Vec<String>) -> AppResult<Del
         .arg("-e")
         .arg(&osa)
         .output();
+
+    *current_path.lock() = Some("Pruning index…".to_string());
 
     let _ = std::fs::remove_file(&list_path);
     let _ = std::fs::remove_file(&script_path);
@@ -684,21 +902,20 @@ pub fn retry_delete_admin(state: &AppState, paths: Vec<String>) -> AppResult<Del
 
     // Check which paths are actually gone now.
     for p in paths {
-        if Path::new(&p).exists() {
+        if Path::new(p).exists() {
             result.errors.push(DeleteError {
-                path: p,
+                path: p.clone(),
                 message: "still present after admin-delete (likely a virtual file-provider mount)"
                     .into(),
             });
         } else {
-            result.deleted.push(p);
+            result.deleted.push(p.clone());
         }
     }
     result.freed = planned_size;
 
     if !result.deleted.is_empty() {
-        let conn = state.index.conn();
-        prune_batch(&conn, &result.deleted)?;
+        prune_batch(conn, &result.deleted)?;
     }
 
     Ok(result)

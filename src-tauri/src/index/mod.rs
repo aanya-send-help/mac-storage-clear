@@ -48,12 +48,36 @@ impl Index {
         &self.path
     }
 
-    /// Acquire a lock on the underlying connection. Use sparingly; long-held
-    /// locks block both readers and writers. For bulk inserts use a dedicated
-    /// thread plus transactions (`writer.rs`).
+    /// Acquire a lock on the WRITE connection. Used by the scanner writer and
+    /// the delete worker — anything that mutates the index.
+    ///
+    /// Reads should NOT use this. They'd serialize behind whatever long-running
+    /// write is in flight (a 5M-row prune holds the lock for seconds), which is
+    /// exactly the freeze the user sees. Use `read_conn()` instead.
     #[allow(dead_code)]
     pub fn conn(&self) -> Arc<Mutex<Connection>> {
         Arc::clone(&self.conn)
+    }
+
+    /// Open a fresh read-only connection to the same DB file. SQLite WAL lets
+    /// readers proceed concurrently with one writer, so this connection is
+    /// independent of whatever the write-conn mutex is holding.
+    ///
+    /// Caller drops the connection when the query finishes — no pooling,
+    /// startup is ~1-2ms and these queries are infrequent.
+    pub fn read_conn(&self) -> AppResult<Connection> {
+        let conn = Connection::open_with_flags(
+            &self.path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )
+        .map_err(map_rusqlite)?;
+        // No journal_mode set — readers inherit the file's WAL mode.
+        // Tune the cache modestly so big SUM/COUNT queries don't churn pages.
+        conn.pragma_update(None, "cache_size", -16_000)
+            .map_err(map_rusqlite)?;
+        conn.pragma_update(None, "temp_store", "MEMORY")
+            .map_err(map_rusqlite)?;
+        Ok(conn)
     }
 }
 

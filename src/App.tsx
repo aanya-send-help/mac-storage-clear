@@ -9,6 +9,8 @@ import { Treemap } from "./components/Treemap";
 import { LargestFiles } from "./components/LargestFiles";
 import { Categories } from "./components/Categories";
 import { Quarantine } from "./components/Quarantine";
+import { DeleteProgress } from "./components/DeleteProgress";
+import { LogOverlay } from "./components/LogOverlay";
 
 interface BuildInfo {
   version: string;
@@ -54,9 +56,10 @@ function Shell() {
         </div>
         <ThemePicker />
       </header>
-      <main className="flex-1 p-6 max-w-6xl mx-auto w-full">
+      <main className="flex-1 p-6 max-w-6xl mx-auto w-full pb-20">
         <div className="space-y-6">
           <ScanProgress />
+          <DeleteProgress />
 
           {error && (
             <div className="p-3 text-sm bg-danger/10 text-danger border border-danger/30 rounded-md font-mono">
@@ -85,6 +88,7 @@ function Shell() {
           {tab === "quarantine" && <Quarantine />}
         </div>
       </main>
+      <LogOverlay />
     </div>
   );
 }

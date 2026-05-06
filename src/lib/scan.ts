@@ -312,32 +312,27 @@ export const useScanStore = create<ScanState>((set, get) => ({
   async retryDeleteAdmin(paths) {
     try {
       get().log("warn", `Retrying ${paths.length} item${paths.length === 1 ? "" : "s"} with admin`);
-      const result = await invoke<DeleteResult>("retry_delete_admin", { paths });
-      const summary =
-        result.errors.length === 0
-          ? `Admin retry: freed ${result.freed} bytes (${result.deleted.length} items)`
-          : `Admin retry: ${result.deleted.length} ok, ${result.errors.length} still failed`;
-      get().log(result.errors.length === 0 ? "info" : "warn", summary);
-      // Update deleteStatus so the banner reflects the new state.
-      set((s) => {
-        if (!s.deleteStatus) return {};
-        const remainingErrors = s.deleteStatus.errors.filter(
-          (e) => !result.deleted.includes(e.path),
-        );
-        return {
-          deleteStatus: {
-            ...s.deleteStatus,
-            bytes_freed: s.deleteStatus.bytes_freed + result.freed,
-            files_seen: s.deleteStatus.files_seen + result.deleted.length,
-            errors: remainingErrors,
-          },
-        };
+      const result = await invoke<{ delete_id: number; total_files: number }>(
+        "retry_delete_admin",
+        { paths },
+      );
+      // Seed running status so the banner shows immediately.
+      set({
+        deleteStatus: {
+          delete_id: result.delete_id,
+          mode: "hard",
+          status: "running",
+          files_seen: 0,
+          bytes_freed: 0,
+          total_files: result.total_files,
+          current_path: "Authenticating with macOS…",
+          errors: [],
+          started_at: Math.floor(Date.now() / 1000),
+          finished_at: null,
+          elapsed_ms: 0,
+        },
       });
-      // Refresh the views.
-      const root = get().treemapRoot ?? get().defaultRoots[0];
-      if (root) get().loadTreemap(root);
-      get().loadCategories();
-      return result;
+      return { freed: 0, deleted: [], errors: [] };
     } catch (e) {
       set({ error: String(e) });
       get().log("error", `Admin retry failed: ${e}`);

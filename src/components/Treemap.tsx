@@ -2,10 +2,34 @@ import { useEffect, useRef } from "react";
 import { hierarchy, treemap } from "d3-hierarchy";
 import { useScanStore } from "../lib/scan";
 import { formatBytes } from "../lib/format";
+import { Breadcrumbs } from "./Breadcrumbs";
 
 interface Props {
   width?: number;
   height?: number;
+}
+
+// Curated 10-color palette. Same name → same hue on each render thanks to
+// the deterministic hash; eliminates the "rainbow vomit" of random hues.
+const PALETTE = [
+  "#fda4af", // rose
+  "#fcd34d", // amber
+  "#86efac", // emerald
+  "#67e8f9", // cyan
+  "#a5b4fc", // indigo
+  "#c4b5fd", // violet
+  "#f0abfc", // fuchsia
+  "#fdba74", // orange
+  "#a3e635", // lime
+  "#5eead4", // teal
+];
+
+function colorForName(name: string): string {
+  let h = 0;
+  for (let i = 0; i < name.length; i++) {
+    h = (h * 31 + name.charCodeAt(i)) >>> 0;
+  }
+  return PALETTE[h % PALETTE.length] ?? PALETTE[0]!;
 }
 
 export function Treemap({ width = 1000, height = 520 }: Props) {
@@ -14,6 +38,7 @@ export function Treemap({ width = 1000, height = 520 }: Props) {
   const loadTreemap = useScanStore((s) => s.loadTreemap);
   const defaultRoots = useScanStore((s) => s.defaultRoots);
   const status = useScanStore((s) => s.status);
+  const loading = useScanStore((s) => s.loadingTreemap);
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -24,34 +49,36 @@ export function Treemap({ width = 1000, height = 520 }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const totalSize = treemapData.reduce((acc, n) => acc + n.size, 0);
+  const rootForCrumbs = defaultRoots[0] ?? treemapRoot ?? "/";
+
   // While a scan is running we don't aggregate, so the treemap is empty by
   // design until completion.
   if (status?.status === "running" && treemapData.length === 0) {
     return (
-      <div
-        className="rounded-lg border border-dashed border-border flex items-center justify-center text-muted text-sm"
-        style={{ height }}
-      >
+      <EmptyShell height={height}>
         Scanning… treemap renders when scan finishes.
-      </div>
+      </EmptyShell>
     );
   }
 
-  if (treemapData.length === 0) {
+  if (treemapData.length === 0 && !loading) {
     return (
-      <div
-        className="rounded-lg border border-dashed border-border flex items-center justify-center text-muted text-sm"
-        style={{ height }}
-      >
+      <EmptyShell height={height}>
         {treemapRoot
           ? `No data for ${treemapRoot}. Run a scan first.`
           : "Run a scan to populate the treemap."}
-      </div>
+      </EmptyShell>
     );
   }
 
   // Build d3 hierarchy from the flat children list.
-  const root = hierarchy<{ name: string; size: number; full_path: string; is_dir: boolean }>({
+  const root = hierarchy<{
+    name: string;
+    size: number;
+    full_path: string;
+    is_dir: boolean;
+  }>({
     name: treemapRoot ?? "/",
     size: 0,
     full_path: treemapRoot ?? "/",
@@ -75,81 +102,110 @@ export function Treemap({ width = 1000, height = 520 }: Props) {
 
   const leaves = root.leaves();
 
-  const totalSize = treemapData.reduce((acc, n) => acc + n.size, 0);
-
   return (
-    <div ref={containerRef} className="rounded-lg border border-border overflow-hidden">
-      <div className="px-4 py-3 bg-surface border-b border-border flex items-center justify-between text-sm">
-        <div className="font-mono text-xs text-muted truncate" title={treemapRoot ?? ""}>
-          {treemapRoot ?? "/"}
-        </div>
-        <div className="text-xs text-muted">
+    <div ref={containerRef} className="rounded-lg border border-border overflow-hidden relative">
+      <div className="px-4 py-3 bg-surface border-b border-border flex items-center justify-between gap-4">
+        <Breadcrumbs
+          path={treemapRoot ?? rootForCrumbs}
+          rootPath={rootForCrumbs}
+          onNavigate={(p) => loadTreemap(p)}
+        />
+        <div className="text-xs text-muted whitespace-nowrap">
           {treemapData.length} entries · {formatBytes(totalSize)}
         </div>
       </div>
-      <svg width={width} height={height} className="block">
-        {leaves.map((leaf, i) => {
-          const x = (leaf as unknown as { x0: number }).x0;
-          const y = (leaf as unknown as { y0: number }).y0;
-          const x1 = (leaf as unknown as { x1: number }).x1;
-          const y1 = (leaf as unknown as { y1: number }).y1;
-          const w = x1 - x;
-          const h = y1 - y;
-          const data = leaf.data as {
-            name: string;
-            size: number;
-            full_path: string;
-            is_dir: boolean;
-          };
-          const hue = (i * 47) % 360;
-          const fill = `hsl(${hue}, 60%, 70%)`;
-          const showLabel = w > 80 && h > 28;
-          return (
-            <g
-              key={data.full_path}
-              transform={`translate(${x},${y})`}
-              className="cursor-pointer"
-              onClick={() => {
-                if (data.is_dir) loadTreemap(data.full_path);
-              }}
-            >
-              <title>
-                {data.name} · {formatBytes(data.size)}
-              </title>
-              <rect
-                width={w}
-                height={h}
-                fill={fill}
-                stroke="rgba(0,0,0,0.15)"
-                strokeWidth={0.5}
-              />
-              {showLabel && (
-                <>
-                  <text
-                    x={6}
-                    y={16}
-                    fontSize={11}
-                    fontWeight={500}
-                    className="select-none pointer-events-none"
-                    fill="#111"
-                  >
-                    {truncate(data.name, Math.floor((w - 10) / 6))}
-                  </text>
-                  <text
-                    x={6}
-                    y={30}
-                    fontSize={10}
-                    className="select-none pointer-events-none"
-                    fill="#222"
-                  >
-                    {formatBytes(data.size)}
-                  </text>
-                </>
-              )}
-            </g>
-          );
-        })}
-      </svg>
+      <div className="relative">
+        <svg width={width} height={height} className="block">
+          {leaves.map((leaf) => {
+            const x = (leaf as unknown as { x0: number }).x0;
+            const y = (leaf as unknown as { y0: number }).y0;
+            const x1 = (leaf as unknown as { x1: number }).x1;
+            const y1 = (leaf as unknown as { y1: number }).y1;
+            const w = x1 - x;
+            const h = y1 - y;
+            const data = leaf.data as {
+              name: string;
+              size: number;
+              full_path: string;
+              is_dir: boolean;
+            };
+            const fill = colorForName(data.name);
+            const showLabel = w > 80 && h > 28;
+            const clickable = data.is_dir;
+            return (
+              <g
+                key={data.full_path}
+                transform={`translate(${x},${y})`}
+                className={
+                  clickable
+                    ? "cursor-pointer hover:opacity-80 transition-opacity"
+                    : "cursor-default"
+                }
+                onClick={() => {
+                  if (clickable) loadTreemap(data.full_path);
+                }}
+              >
+                <title>
+                  {data.full_path} · {formatBytes(data.size)}
+                  {clickable ? " · click to drill in" : ""}
+                </title>
+                <rect
+                  width={w}
+                  height={h}
+                  fill={fill}
+                  stroke="rgba(0,0,0,0.15)"
+                  strokeWidth={0.5}
+                />
+                {showLabel && (
+                  <>
+                    <text
+                      x={6}
+                      y={16}
+                      fontSize={11}
+                      fontWeight={500}
+                      className="select-none pointer-events-none"
+                      fill="#111"
+                    >
+                      {truncate(data.name, Math.floor((w - 10) / 6))}
+                    </text>
+                    <text
+                      x={6}
+                      y={30}
+                      fontSize={10}
+                      className="select-none pointer-events-none"
+                      fill="#222"
+                    >
+                      {formatBytes(data.size)}
+                    </text>
+                  </>
+                )}
+              </g>
+            );
+          })}
+        </svg>
+        {loading && (
+          <div className="absolute inset-0 flex items-center justify-center bg-bg/40 backdrop-blur-[1px] text-sm text-muted pointer-events-none">
+            Loading…
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function EmptyShell({
+  height,
+  children,
+}: {
+  height: number;
+  children: React.ReactNode;
+}) {
+  return (
+    <div
+      className="rounded-lg border border-dashed border-border flex items-center justify-center text-muted text-sm"
+      style={{ height }}
+    >
+      {children}
     </div>
   );
 }

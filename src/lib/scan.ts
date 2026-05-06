@@ -44,6 +44,7 @@ interface ScanState {
   cancelScan: () => Promise<void>;
   loadTreemap: (parent: string) => Promise<void>;
   loadLargest: (limit?: number) => Promise<void>;
+  refreshAll: () => Promise<void>;
   initEvents: () => Promise<UnlistenFn>;
 }
 
@@ -134,6 +135,16 @@ export const useScanStore = create<ScanState>((set, get) => ({
     } catch (e) {
       set({ error: String(e), loadingLargest: false });
     }
+  },
+
+  async refreshAll() {
+    const { treemapRoot, defaultRoots, loadTreemap, loadLargest, refreshStatus } = get();
+    const target = treemapRoot ?? defaultRoots[0];
+    await Promise.all([
+      target ? loadTreemap(target) : Promise.resolve(),
+      loadLargest(),
+      refreshStatus(),
+    ]);
   },
 
   async initEvents() {

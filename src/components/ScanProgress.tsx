@@ -1,5 +1,5 @@
 import { useScanStore } from "../lib/scan";
-import { formatBytes } from "../lib/format";
+import { formatBytes, formatRelativeTime } from "../lib/format";
 
 export function ScanProgress() {
   const status = useScanStore((s) => s.status);
@@ -46,26 +46,33 @@ export function ScanProgress() {
             )}
             <span className="text-sm font-medium capitalize">{status.status}</span>
             <span className="text-xs text-muted font-mono">scan #{status.scan_id}</span>
+            {!isRunning && status.finished_at && (
+              <span className="text-xs text-muted">
+                · {formatRelativeTime(status.finished_at * 1000)}
+              </span>
+            )}
           </div>
           <div className="mt-1 text-xs text-muted truncate max-w-2xl" title={status.current_path ?? ""}>
             {status.current_path ?? "—"}
           </div>
         </div>
-        {isRunning ? (
-          <button
-            onClick={cancelScan}
-            className="px-3 py-1.5 text-sm bg-danger text-white rounded-md hover:opacity-90"
-          >
-            Cancel
-          </button>
-        ) : (
-          <button
-            onClick={() => startScan()}
-            className="px-3 py-1.5 text-sm bg-accent text-white rounded-md hover:opacity-90"
-          >
-            Re-scan
-          </button>
-        )}
+        <div className="flex items-center gap-2 shrink-0">
+          {isRunning ? (
+            <button
+              onClick={cancelScan}
+              className="px-3 py-1.5 text-sm bg-danger text-white rounded-md hover:opacity-90"
+            >
+              Cancel
+            </button>
+          ) : (
+            <button
+              onClick={() => startScan()}
+              className="px-3 py-1.5 text-sm bg-accent text-white rounded-md hover:opacity-90"
+            >
+              Re-scan
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="grid grid-cols-4 gap-4 text-sm">

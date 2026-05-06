@@ -13,6 +13,14 @@ pub enum AppError {
     PathNotAllowed(String),
     #[error("not implemented yet")]
     NotImplemented,
+    #[error("sqlite error: {0}")]
+    Sqlite(String),
+    #[error("scan error: {0}")]
+    Scan(String),
+    #[error("no active scan with id {0}")]
+    NoSuchScan(i64),
+    #[error("scan already running")]
+    ScanAlreadyRunning,
 }
 
 impl serde::Serialize for AppError {

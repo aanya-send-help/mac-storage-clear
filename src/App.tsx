@@ -1,8 +1,12 @@
 import { useEffect, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "./lib/tauri";
+import { useScanStore } from "./lib/scan";
 import { ThemeProvider } from "./lib/theme";
 import { BuildBadge } from "./components/BuildBadge";
 import { ThemePicker } from "./components/ThemePicker";
+import { ScanProgress } from "./components/ScanProgress";
+import { Treemap } from "./components/Treemap";
+import { LargestFiles } from "./components/LargestFiles";
 
 interface BuildInfo {
   version: string;
@@ -11,16 +15,33 @@ interface BuildInfo {
   sandboxed: boolean;
 }
 
+type TabId = "treemap" | "largest";
+
 function Shell() {
   const [build, setBuild] = useState<BuildInfo | null>(null);
+  const [tab, setTab] = useState<TabId>("treemap");
+  const error = useScanStore((s) => s.error);
+  const loadDefaultRoots = useScanStore((s) => s.loadDefaultRoots);
+  const refreshStatus = useScanStore((s) => s.refreshStatus);
+  const initEvents = useScanStore((s) => s.initEvents);
 
   useEffect(() => {
     invoke<BuildInfo>("get_build_info")
       .then(setBuild)
-      .catch((err: unknown) => {
-        console.error("get_build_info failed", err);
-      });
+      .catch((err: unknown) => console.error("get_build_info", err));
   }, []);
+
+  useEffect(() => {
+    loadDefaultRoots();
+    refreshStatus();
+    let cleanup: (() => void) | undefined;
+    initEvents().then((fn) => {
+      cleanup = fn;
+    });
+    return () => {
+      cleanup?.();
+    };
+  }, [loadDefaultRoots, refreshStatus, initEvents]);
 
   return (
     <div className="min-h-screen bg-bg text-fg flex flex-col">
@@ -31,15 +52,53 @@ function Shell() {
         </div>
         <ThemePicker />
       </header>
-      <main className="flex-1 p-6">
-        <div className="max-w-3xl mx-auto">
-          <p className="text-muted">
-            Phase 0 scaffold. Scanner not wired yet — the disk visualization, categories,
-            and delete pipeline land in subsequent phases.
-          </p>
+      <main className="flex-1 p-6 max-w-6xl mx-auto w-full">
+        <div className="space-y-6">
+          <ScanProgress />
+
+          {error && (
+            <div className="p-3 text-sm bg-danger/10 text-danger border border-danger/30 rounded-md font-mono">
+              {error}
+            </div>
+          )}
+
+          <div className="flex gap-1 border-b border-border">
+            <TabButton active={tab === "treemap"} onClick={() => setTab("treemap")}>
+              Treemap
+            </TabButton>
+            <TabButton active={tab === "largest"} onClick={() => setTab("largest")}>
+              Largest files
+            </TabButton>
+          </div>
+
+          {tab === "treemap" && <Treemap />}
+          {tab === "largest" && <LargestFiles />}
         </div>
       </main>
     </div>
+  );
+}
+
+function TabButton({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+        active
+          ? "border-accent text-fg"
+          : "border-transparent text-muted hover:text-fg"
+      }`}
+    >
+      {children}
+    </button>
   );
 }
 

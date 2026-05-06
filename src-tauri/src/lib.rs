@@ -6,11 +6,16 @@
 //!
 //! These flags are mutually exclusive in practice; CI builds each separately.
 
+mod app_state;
 mod commands;
 mod error;
+mod index;
 mod privileged;
+mod scanner;
 mod scope;
 
+use app_state::AppState;
+use tauri::Manager;
 use tracing_subscriber::EnvFilter;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -26,7 +31,20 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_store::Builder::default().build())
         .plugin(tauri_plugin_os::init())
-        .invoke_handler(tauri::generate_handler![commands::get_build_info,])
+        .setup(|app| {
+            let state = AppState::new(app.handle())?;
+            app.manage(state);
+            Ok(())
+        })
+        .invoke_handler(tauri::generate_handler![
+            commands::get_build_info,
+            commands::default_scan_roots,
+            commands::start_scan,
+            commands::cancel_scan,
+            commands::get_scan_status,
+            commands::get_treemap,
+            commands::list_largest,
+        ])
         .run(tauri::generate_context!())
         .expect("error while running mac-storage-clear");
 }

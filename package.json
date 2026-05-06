@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
+    "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
@@ -14,7 +14,7 @@
     "tauri:build:devid": "tauri build --config src-tauri/tauri.conf.devid.json",
     "tauri:build:appstore": "tauri build --config src-tauri/tauri.conf.appstore.json",
     "lint": "eslint . --ext .ts,.tsx",
-    "typecheck": "tsc -b --noEmit"
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.1.1",
@@ -30,6 +30,7 @@
   "devDependencies": {
     "@tauri-apps/cli": "^2.1.0",
     "@types/d3-hierarchy": "^3.1.7",
+    "@types/node": "^22.9.0",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "@typescript-eslint/eslint-plugin": "^7.18.0",

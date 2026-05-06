@@ -80,7 +80,22 @@ ask() {
     printf "%s" "$__var"
 }
 
-# ── do_claim: take ownership of a single path with all safety checks ───────
+# ── pick a sensible parallelism level (M-series performance cores) ─────────
+detect_workers() {
+    local n
+    # Apple Silicon: prefer performance cores only.
+    n="$(sysctl -n hw.perflevel0.physicalcpu 2>/dev/null || true)"
+    if [[ -z "$n" ]]; then
+        n="$(sysctl -n hw.physicalcpu 2>/dev/null || true)"
+    fi
+    if [[ -z "$n" ]] || [[ "$n" -lt 1 ]]; then
+        n=8
+    fi
+    echo "$n"
+}
+WORKERS="${WORKERS:-$(detect_workers)}"
+
+# ── do_claim: parallel chown of a single path, with heartbeat ──────────────
 do_claim() {
     local target="$1" target_real basename_
 
@@ -113,9 +128,49 @@ do_claim() {
         return 1
     fi
 
-    note "claiming $target_real → $INVOKER:$INVOKER_GROUP"
-    chown -RhP "$INVOKER:$INVOKER_GROUP" "$target_real"
-    ok "$target_real is now owned by $INVOKER:$INVOKER_GROUP"
+    note "claiming $target_real → $INVOKER:$INVOKER_GROUP (parallel: $WORKERS workers)"
+
+    # Heartbeat so the user sees we're alive on multi-GB trees.
+    local start=$SECONDS
+    (
+        # First message after 10s, then every 30s.
+        sleep 10
+        while true; do
+            local e=$((SECONDS - start))
+            printf "    ... still claiming, %d:%02d elapsed\n" "$((e / 60))" "$((e % 60))" >&2
+            sleep 30
+        done
+    ) &
+    local hb_pid=$!
+    # Make sure heartbeat dies if we get killed.
+    trap 'kill '"$hb_pid"' 2>/dev/null || true' RETURN INT TERM
+
+    # Parallel chown:
+    #   find -print0           NUL-delimited paths (handles spaces/newlines safely)
+    #   xargs -0 -P N          N concurrent worker processes
+    #         -n 500           batch 500 paths per chown invocation (amortizes spawn cost)
+    #   chown -h               don't follow symlinks (change the link itself)
+    #
+    # find's metadata walk is the floor on speed; chown only updates inode metadata
+    # so it's fast once the walk is feeding it. On M-series, this saturates the
+    # APFS metadata path well before the user is bottlenecked elsewhere.
+    local rc=0
+    find "$target_real" -print0 2>/dev/null \
+        | xargs -0 -P "$WORKERS" -n 500 chown -h "$INVOKER:$INVOKER_GROUP" \
+        || rc=$?
+
+    kill "$hb_pid" 2>/dev/null || true
+    wait "$hb_pid" 2>/dev/null || true
+    trap - RETURN INT TERM
+
+    local elapsed=$((SECONDS - start))
+    if [[ "$rc" -eq 0 ]]; then
+        ok "$target_real claimed in ${elapsed}s"
+    else
+        err "chown reported errors on $target_real (exit $rc, ${elapsed}s)"
+        err "spot-check with: ls -la \"$target_real\""
+        return 1
+    fi
 }
 
 # ── explicit target mode ──────────────────────────────────────────────────

@@ -129,7 +129,6 @@ if [[ $# -ge 1 ]]; then
 
     echo "About to claim ownership:"
     echo "  Path:       $target"
-    echo "  Size:       $(du -sh "$target" 2>/dev/null | awk '{print $1}')"
     echo "  New owner:  $INVOKER:$INVOKER_GROUP"
     echo
     confirm="$(ask 'Proceed? [y/N] ')"
@@ -142,7 +141,7 @@ if [[ $# -ge 1 ]]; then
 fi
 
 # ── interactive picker mode ───────────────────────────────────────────────
-note "scanning /Users for orphaned home directories..."
+note "scanning /Users (top-level only)..."
 echo
 
 CANDIDATES=()
@@ -165,13 +164,13 @@ for entry in /Users/.[!.]* /Users/*; do
         continue
     fi
 
+    # Cheap top-level metadata only — no recursive size walk (du -sh on a
+    # large home dir can take minutes).
     owner="$(stat -f '%Su' "$entry" 2>/dev/null || echo '?')"
-    size="$(du -sh "$entry" 2>/dev/null | awk '{print $1}')"
-    [[ -z "$size" ]] && size='?'
 
     idx=$((idx + 1))
     CANDIDATES+=("$entry")
-    DISPLAYS+=("$(printf '  [%d]  owner=%-12s  size=%-7s  %s' "$idx" "$owner" "$size" "$entry")")
+    DISPLAYS+=("$(printf '  [%d]  owner=%-12s  %s' "$idx" "$owner" "$entry")")
 done
 
 if [[ ${#CANDIDATES[@]} -eq 0 ]]; then
@@ -215,6 +214,7 @@ fi
 echo
 echo "Will chown to $INVOKER:$INVOKER_GROUP:"
 for d in "${TO_CLAIM[@]}"; do echo "  $d"; done
+echo "(sizes not computed — du -sh on large trees is slow; chown itself only updates metadata so it's fast)"
 echo
 
 confirm="$(ask 'Proceed? [y/N] ')"

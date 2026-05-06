@@ -1,6 +1,7 @@
 ---
 import Base from "../layouts/Base.astro";
 import Feature from "../components/Feature.astro";
+import CopyableCommand from "../components/CopyableCommand.astro";
 ---
 
 <Base title="Mac Storage Clear">
@@ -63,6 +64,55 @@ import Feature from "../components/Feature.astro";
         title="Quarantine first"
         body="Automated cleanups move files to a 7-day quarantine before any unlink. Manual selections hard-delete by default — your call."
       />
+    </div>
+  </section>
+
+  <section
+    id="claim-deleted-user"
+    class="max-w-5xl mx-auto px-6 py-16 border-t border-black/5"
+  >
+    <div class="grid md:grid-cols-2 gap-10 items-start">
+      <div>
+        <span
+          class="inline-block text-xs uppercase tracking-wider text-rose-600 font-semibold"
+          >Companion script</span
+        >
+        <h2 class="mt-2 text-2xl font-semibold tracking-tight">
+          Reclaim files from deleted user accounts
+        </h2>
+        <p class="mt-4 text-ink/70 leading-relaxed">
+          Deleted a macOS user but kept their home folder? Those files are still owned by the old
+          UID and unreadable by your account — even with Full Disk Access, since Unix permissions
+          still apply.
+        </p>
+        <p class="mt-3 text-ink/70 leading-relaxed">
+          Run the one-liner. It lists every orphaned home directory under <code
+            class="text-xs bg-black/5 px-1 rounded">/Users</code
+          >, lets you pick which to claim, and chowns them to your account. After that the App
+          Store version of Mac Storage Clear (with FDA + a folder grant for <code
+            class="text-xs bg-black/5 px-1 rounded">/Users</code
+          >) can scan and delete them like anything else.
+        </p>
+        <p class="mt-3 text-sm text-ink/55">
+          Source: <a
+            href="https://github.com/aanya-send-help/mac-storage-clear/blob/main/scripts/claim-orphaned-home.sh"
+            class="underline"
+            rel="noopener">scripts/claim-orphaned-home.sh</a
+          > · MIT · refuses to operate outside <code class="text-xs bg-black/5 px-1 rounded"
+            >/Users</code
+          > · prompts before changing anything.
+        </p>
+      </div>
+      <div class="space-y-5">
+        <CopyableCommand
+          label="Interactive picker"
+          command="curl -fsSL https://mac-storage-clear.flek.ai/claim.sh | sudo bash"
+        />
+        <CopyableCommand
+          label="Skip picker, claim a specific user"
+          command="sudo bash <(curl -fsSL https://mac-storage-clear.flek.ai/claim.sh) flek"
+        />
+      </div>
     </div>
   </section>
 
